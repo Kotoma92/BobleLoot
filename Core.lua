@@ -14,7 +14,7 @@ local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
-BobleLoot.version = "1.0.2"
+BobleLoot.version = "1.1.0"
 
 local DB_DEFAULTS = {
     profile = {
@@ -51,6 +51,9 @@ local DB_DEFAULTS = {
         simCap       = 5.0,
         mplusCap     = 40,   -- M+ dungeons completed this season -> 1.0
         historyCap   = 5,
+        minimap  = { hide = false, minimapPos = 220 },
+        panelPos = { point = "CENTER", x = 0, y = 0 },
+        lastTab  = "weights",
     },
 }
 
@@ -59,8 +62,8 @@ function BobleLoot:OnInitialize()
     self:RegisterChatCommand("bl",       "OnSlashCommand")
     self:RegisterChatCommand("bobleloot","OnSlashCommand")
 
-    if ns.Config and ns.Config.Setup then
-        ns.Config:Setup(self)
+    if ns.SettingsPanel and ns.SettingsPanel.Setup then
+        ns.SettingsPanel:Setup(self)
     end
 end
 
@@ -73,6 +76,9 @@ function BobleLoot:OnEnable()
     end
     if ns.LootHistory and ns.LootHistory.Setup then
         ns.LootHistory:Setup(self)
+    end
+    if ns.MinimapButton and ns.MinimapButton.Setup then
+        ns.MinimapButton:Setup(self)
     end
     -- Hook RCLootCouncil if present; otherwise wait for it to load.
     if not self:TryHookRC() then
@@ -140,13 +146,19 @@ end
 function BobleLoot:OnSlashCommand(input)
     input = (input or ""):trim():lower()
     if input == "" or input == "config" or input == "options" then
-        if ns.Config and ns.Config.Open then
-            ns.Config:Open()
+        if ns.SettingsPanel and ns.SettingsPanel.Open then
+            ns.SettingsPanel:Open()
         else
-            self:Print("Config module not loaded.")
+            self:Print("Settings panel not loaded.")
         end
     elseif input == "version" then
         self:Print("version " .. self.version)
+    elseif input == "minimap" then
+        if ns.MinimapButton and ns.MinimapButton.ToggleMinimapIcon then
+            ns.MinimapButton:ToggleMinimapIcon(self)
+            local hidden = self.db.profile.minimap.hide
+            self:Print("minimap icon " .. (hidden and "hidden." or "shown."))
+        end
     elseif input == "broadcast" or input == "push" then
         if ns.Sync and ns.Sync.BroadcastNow then
             ns.Sync:BroadcastNow(self)
@@ -200,6 +212,6 @@ function BobleLoot:OnSlashCommand(input)
             ns.TestRunner:Run(self, n, self.db.profile.testUseDatasetItems)
         end
     else
-        self:Print("Commands: /bl config | /bl version | /bl broadcast | /bl transparency on|off | /bl checkdata | /bl lootdb | /bl debugchar <Name-Realm> | /bl test [N] | /bl score <itemID> <Name-Realm>")
+        self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | /bl transparency on|off | /bl checkdata | /bl lootdb | /bl debugchar <Name-Realm> | /bl test [N] | /bl score <itemID> <Name-Realm>")
     end
 end
