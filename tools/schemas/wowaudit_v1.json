@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WoWAudit API response schemas v1",
+  "$defs": {
+    "period_response": {
+      "type": "object",
+      "properties": {
+        "current_period": { "type": "integer" },
+        "current_season": {
+          "type": "object",
+          "properties": {
+            "first_period_id": { "type": "integer" },
+            "start_date":      { "type": "string" }
+          }
+        }
+      }
+    },
+    "characters_response": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id":    { "type": "integer" },
+          "name":  { "type": "string" },
+          "realm": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "attendance_response": {
+      "type": "object",
+      "required": ["characters"],
+      "properties": {
+        "characters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id":                   { "type": "integer" },
+              "attended_percentage":  { "type": ["number", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "historical_data_response": {
+      "type": "object",
+      "properties": {
+        "characters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id":   { "type": "integer" },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "dungeons_done": { "type": "array" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "wishlists_response": {
+      "type": "object",
+      "required": ["characters"],
+      "properties": {
+        "characters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id":        { "type": "integer" },
+              "instances": { "type": "array" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

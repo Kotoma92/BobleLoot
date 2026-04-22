@@ -1,0 +1,6 @@
+{
+  "characters": [
+    {"id": 1, "attended_percentage": 92.5},
+    {"id": 2, "attended_percentage": 78.0}
+  ]
+}
