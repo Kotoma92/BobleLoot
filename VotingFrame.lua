@@ -159,6 +159,31 @@ local function computeSessionStats(rcVoting, addon, session, tableData)
     return median, max
 end
 
+local FRESHNESS_WARN_SECS  = 72 * 3600       -- 72 hours
+local FRESHNESS_DANGER_SECS = 7 * 24 * 3600  -- 7 days
+
+-- Returns nil (fresh), "warning", or "danger" based on dataset age.
+local function datasetFreshnessState()
+    local d = _G.BobleLoot_Data
+    if not d or not d.generatedAtTimestamp then return nil end
+    local age = time() - d.generatedAtTimestamp
+    if age >= FRESHNESS_DANGER_SECS then return "danger" end
+    if age >= FRESHNESS_WARN_SECS   then return "warning" end
+    return nil
+end
+
+-- Format age in a human-readable string: "3 days 4 hours" etc.
+local function formatAge(secs)
+    local days  = math.floor(secs / 86400)
+    local hours = math.floor((secs % 86400) / 3600)
+    if days > 0 then
+        return string.format("%d day%s %d hour%s",
+            days,  days  == 1 and "" or "s",
+            hours, hours == 1 and "" or "s")
+    end
+    return string.format("%d hour%s", hours, hours == 1 and "" or "s")
+end
+
 -- score    : number | nil   (nil = Scoring:Compute returned nil)
 -- inDataset: bool           (true = character row exists in dataset)
 -- median   : number | nil   (session median across all scored candidates)
@@ -434,6 +459,65 @@ function VF:Hook(addon, RC)
     if rcVoting.frame and rcVoting.frame.st and rcVoting.frame.st.SetDisplayCols then
         rcVoting.frame.st:SetDisplayCols(rcVoting.scrollCols)
     end
+
+    -- Freshness badge on the Score column header.
+    -- We find the header row of the lib-st table and attach a FontString
+    -- to the cell that corresponds to our SCORE_COL column.
+    local function refreshFreshnessBadge()
+        local state = datasetFreshnessState()
+        local badge = VF._freshnessBadge
+        if not badge then return end
+
+        if not state then
+            badge:SetText("")
+            badge:SetScript("OnEnter", nil)
+            badge:SetScript("OnLeave", nil)
+            return
+        end
+
+        local t  = ns.Theme
+        local c  = (state == "danger") and (t and t.danger or {1, 0.31, 0.31, 1})
+                                        or  (t and t.warning or {1, 0.82, 0, 1})
+        badge:SetText(string.format("|cff%02x%02x%02x!|r",
+            math.floor(c[1]*255), math.floor(c[2]*255), math.floor(c[3]*255)))
+
+        badge:SetScript("OnEnter", function(self)
+            local d   = _G.BobleLoot_Data
+            local age = d and d.generatedAtTimestamp
+                        and formatAge(time() - d.generatedAtTimestamp)
+                        or  "unknown time"
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine("Boble Loot \xe2\x80\x94 dataset age")
+            GameTooltip:AddLine(string.format(
+                "Dataset generated %s ago.", age), 1, 1, 1)
+            GameTooltip:AddLine(
+                "Run tools/wowaudit.py to refresh.", 0.7, 0.7, 0.7)
+            GameTooltip:Show()
+        end)
+        badge:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
+    -- Attach badge FontString to the st header frame if accessible.
+    -- lib-st exposes the header row as st.header; each cell is st.header.cols[i].
+    local st = rcVoting.frame and rcVoting.frame.st
+    if st and st.header then
+        -- Find which column index is ours.
+        local colIdx
+        for i, col in ipairs(rcVoting.scrollCols) do
+            if col.colName == SCORE_COL then colIdx = i; break end
+        end
+        if colIdx and st.header.cols and st.header.cols[colIdx] then
+            local headerCell = st.header.cols[colIdx]
+            local badge = headerCell:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            badge:SetPoint("TOPRIGHT", headerCell, "TOPRIGHT", 0, 0)
+            badge:SetText("")
+            VF._freshnessBadge = badge
+            refreshFreshnessBadge()
+        end
+    end
+
+    -- Store refreshFreshnessBadge so it can be called after data reloads.
+    VF.refreshFreshnessBadge = refreshFreshnessBadge
 
     self.hooked = true
     addon:Print("hooked into RCLootCouncil voting frame.")
