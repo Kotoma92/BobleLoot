@@ -139,7 +139,7 @@ Each component is normalized to `[0,1]`:
 |-------------|------------------------------------------------|
 | sim         | `min(simPct / simCap, 1)`                      |
 | bis         | `1` if on BiS, else `partialBiSValue` (default 0.25) |
-| history     | `1 - min(itemsReceived / historyCap, 1)`       |
+| history     | `1 - itemsReceived / max(maxInRaid, softFloor)` |
 | attendance  | `attendance / 100`                             |
 | mplus       | `min(mplusScore / mplusCap, 1)`                |
 

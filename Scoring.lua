@@ -40,10 +40,19 @@ local function bisComponent(char, itemID, partial)
     return partial, false
 end
 
-local function historyComponent(char, historyCap)
+-- Hybrid loot-equity model: denominator is the larger of (a) the
+-- highest itemsReceived among current bidders and (b) the configured
+-- soft floor. Pure relative would be cruel early-season when one
+-- person has any loot; the floor keeps the score sane until someone
+-- actually crosses it.
+local function historyComponent(char, softFloor, historyReference)
     if char.itemsReceived == nil then return nil end
-    if historyCap <= 0 then return 1, char.itemsReceived end
-    return clamp01(1 - (char.itemsReceived / historyCap)), char.itemsReceived
+    local denom = softFloor or 0
+    if historyReference and historyReference > denom then
+        denom = historyReference
+    end
+    if denom <= 0 then return 1, char.itemsReceived end
+    return clamp01(1 - (char.itemsReceived / denom)), char.itemsReceived
 end
 
 local function attendanceComponent(char)
@@ -74,11 +83,12 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
 
     local mplusCap   = (profile.overrideCaps and profile.mplusCap)   or data.mplusCap   or 40
     local historyCap = (profile.overrideCaps and profile.historyCap) or data.historyCap or 5
-    local simReference = opts and opts.simReference  -- max sim pct across bidders
+    local simReference     = opts and opts.simReference      -- max sim pct across bidders
+    local historyReference = opts and opts.historyReference  -- max itemsReceived across bidders
 
     local simVal,  simRaw  = simComponent(char, itemID, simReference)
     local bisVal,  bisRaw  = bisComponent(char, itemID, profile.partialBiSValue or 0.25)
-    local histVal, histRaw = historyComponent(char, historyCap)
+    local histVal, histRaw = historyComponent(char, historyCap, historyReference)
     local attVal,  attRaw  = attendanceComponent(char)
     local mpVal,   mpRaw   = mplusComponent(char, mplusCap)
 
@@ -97,6 +107,7 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
         sim        = { value = simVal,  raw = simRaw,  reference = simReference },
         bis        = { value = bisVal,  raw = bisRaw                            },
         history    = { value = histVal, raw = histRaw, cap = historyCap,
+                       reference = historyReference,
                        breakdown = char.itemsReceivedBreakdown                  },
         attendance = { value = attVal,  raw = attRaw                            },
         mplus      = { value = mpVal,   raw = mpRaw,   cap = mplusCap           },

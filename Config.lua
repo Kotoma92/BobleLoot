@@ -166,7 +166,14 @@ function Config:BuildOptions()
                         set = function(_, v) p().mplusCap = v end,
                     },
                     historyCap = {
-                        type = "range", order = 5, name = "Recent items cap",
+                        type = "range", order = 5, name = "Loot equity soft floor",
+                        desc = "Loot history is scored relative to the highest "
+                            .. "'items received' among the bidders for the item. "
+                            .. "This soft floor is used as a minimum denominator "
+                            .. "early in the season (before anyone has crossed it) "
+                            .. "so a single 1-loot person doesn't crush the "
+                            .. "differentiation. Set higher = harder to lose "
+                            .. "history credit early.",
                         min = 1, max = 20, step = 1,
                         disabled = function() return not p().overrideCaps end,
                         get = function() return p().historyCap end,
