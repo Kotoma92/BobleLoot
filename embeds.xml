@@ -1,9 +1,0 @@
-<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\FrameXML\UI.xsd">
-    <!--
-        Boble Loot expects the standard Ace3 libraries to be available.
-        If your installation does not have them globally, drop them into
-        a Libs/ folder next to this file and uncomment the include below.
-    -->
-    <!-- <Include file="Libs\Libs.xml" /> -->
-</Ui>
