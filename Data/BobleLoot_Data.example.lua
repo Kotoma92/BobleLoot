@@ -10,8 +10,13 @@ BobleLoot_Data = {
         ["Examplechar-Examplerealm"] = {
             attendance    = 100.0,
             mplusDungeons = 0,
-            bis  = { [12345] = true },
-            sims = { [12345] = 1.23 },
+            bis      = { [12345] = true },
+            sims     = { [12345] = 1.23 },
+            -- simsKnown lists every itemID for which a sim result was
+            -- fetched, including items whose result was 0%. This allows
+            -- Scoring.lua to distinguish "sim was zero" from "item was
+            -- never simmed" — see Batch 1B plan for rationale.
+            simsKnown = { [12345] = true },
         },
     },
 }

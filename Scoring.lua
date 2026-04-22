@@ -4,6 +4,28 @@
 
      A component is dropped (and its weight redistributed) when the
      underlying data is missing for that candidate.
+
+     NIL-VS-ZERO INVARIANT (Batch 1B, 2026-04-22)
+     -----------------------------------------------
+     simComponent returns nil ONLY when the item was never simmed for
+     this character (i.e. char.simsKnown[itemID] is falsy AND
+     char.sims[itemID] is nil).  A genuinely-zero sim result returns
+     0.0, not nil.
+
+     The data file encodes this via two parallel structures:
+       char.sims[itemID]      -- numeric upgrade %, may be absent if 0
+       char.simsKnown[itemID] -- true iff wowaudit.py fetched a result
+                              --   for this item (even a 0% result)
+
+     Scoring:Compute hard-returns nil for a candidate when sim weight
+     is active and simComponent returns nil. This means: "we have no
+     idea whether this item is an upgrade, so it would be misleading
+     to rank this candidate against others who have been simmed."
+     It does NOT mean "sim is zero" — that case must score, just low.
+
+     Do not collapse simsKnown into sims using a sentinel (e.g. -1).
+     The sims table is a plain number map; sentinels require every
+     consumer to know about them. Keep the tables separate.
 ]]
 
 local _, ns = ...
@@ -20,17 +42,24 @@ end
 
 local function simComponent(char, itemID, simReference)
     if not char.sims then return nil end
-    local pct = char.sims[itemID]
-    if pct == nil then return nil end
-    -- Per-item comparative normalization: if a reference max (= the
-    -- highest sim percentage for this item among the current bidders)
-    -- is provided, scale value to [0..1] against that. The bidder with
-    -- the biggest upgrade gets 1.0, others scaled proportionally.
+    -- simsKnown is a set of itemIDs for which a sim result exists in the
+    -- dataset, even if that result is zero. Without it, an omitted key
+    -- (wowaudit.py didn't write zero-value entries) is indistinguishable
+    -- from "item was never simmed for this character."
+    --
+    -- Invariant: if simsKnown[itemID] is true, the sim result is known and
+    -- authoritative; char.sims[itemID] may be nil (treat as 0.0) or a
+    -- non-negative percentage. If simsKnown is absent or simsKnown[itemID]
+    -- is falsy, the item has no sim data — return nil (no-data sentinel).
+    local known = char.simsKnown and char.simsKnown[itemID]
+    local pct   = char.sims[itemID]
+    if pct == nil and not known then return nil end
+    -- Item is known (simsKnown[itemID] = true) OR pct is an explicit value.
+    -- Either way we have a result; coerce nil to 0.0.
+    pct = pct or 0.0
     if simReference and simReference > 0 then
         return clamp01(pct / simReference), pct
     end
-    -- No reference (e.g. /bl score from chat): fall back to raw fraction
-    -- so the score is at least monotonic in the upgrade size.
     return pct / 100, pct
 end
 
