@@ -106,11 +106,133 @@ function MB:BuildTooltip(tt)
         .. "Left-click: open settings  |  Right-click: quick actions|r")
 end
 
--- ── Right-click dropdown (body in Task 5) ─────────────────────────────
+-- ── Dropdown frame (created once, reused on each right-click) ─────────
+
+local dropdownFrame = CreateFrame("Frame", "BobleLootMinimapDropdown", UIParent,
+    "UIDropDownMenuTemplate")
+
+-- ── Right-click dropdown ───────────────────────────────────────────────
 
 function MB:ShowDropdown()
-    -- Implemented in Task 5. Stub is intentional.
-    -- EasyMenu wiring added there to keep task diffs small.
+    local isLeader = UnitIsGroupLeader("player")
+    local lh       = ns.LootHistory
+    local data     = _G.BobleLoot_Data
+    local addonVer = addon and addon.version or "?"
+
+    local menu = {
+        -- Header (disabled title)
+        { text = "Boble Loot", isTitle = true, notClickable = true, notCheckable = true },
+
+        -- Broadcast dataset
+        {
+            text = "Broadcast dataset",
+            notCheckable = true,
+            disabled = not isLeader,
+            func = function()
+                if ns.Sync and ns.Sync.BroadcastNow then
+                    ns.Sync:BroadcastNow(addon)
+                    addon:Print("announced dataset to raid.")
+                end
+            end,
+        },
+
+        -- Refresh loot history
+        {
+            text = "Refresh loot history",
+            notCheckable = true,
+            func = function()
+                if ns.LootHistory and ns.LootHistory.Apply then
+                    ns.LootHistory:Apply(addon)
+                    local lh2 = ns.LootHistory
+                    addon:Print(string.format(
+                        "Loot history refreshed. matched=%d scanned=%d source=%s",
+                        lh2.lastMatched or 0,
+                        lh2.lastScanned or 0,
+                        lh2.lastSource  or "?"))
+                end
+            end,
+        },
+
+        -- Run test session (submenu)
+        {
+            text = "Run test session",
+            notCheckable = true,
+            hasArrow = true,
+            menuList = {
+                {
+                    text = "3 items", notCheckable = true,
+                    func = function()
+                        if ns.TestRunner then
+                            ns.TestRunner:Run(addon, 3,
+                                addon.db.profile.testUseDatasetItems ~= false)
+                        end
+                    end,
+                },
+                {
+                    text = "5 items", notCheckable = true,
+                    func = function()
+                        if ns.TestRunner then
+                            ns.TestRunner:Run(addon, 5,
+                                addon.db.profile.testUseDatasetItems ~= false)
+                        end
+                    end,
+                },
+                {
+                    text = "10 items", notCheckable = true,
+                    func = function()
+                        if ns.TestRunner then
+                            ns.TestRunner:Run(addon, 10,
+                                addon.db.profile.testUseDatasetItems ~= false)
+                        end
+                    end,
+                },
+            },
+        },
+
+        -- Transparency mode toggle (leader-only checkbox)
+        {
+            text = "Transparency mode",
+            checked = addon and addon:IsTransparencyEnabled() or false,
+            disabled = not isLeader,
+            tooltipOnButton = true,
+            tooltipTitle    = isLeader and nil or "Leader only",
+            tooltipText     = isLeader and nil
+                or "Only the raid/group leader can toggle transparency mode.",
+            func = function()
+                if not isLeader then return end
+                local v = not (addon and addon:IsTransparencyEnabled())
+                addon:SetTransparencyEnabled(v, true)
+                -- Refresh settings panel if open
+                if ns.SettingsPanel and ns.SettingsPanel.Refresh then
+                    ns.SettingsPanel:Refresh()
+                end
+            end,
+        },
+
+        -- Separator
+        { text = "", disabled = true, notCheckable = true },
+
+        -- Open settings
+        {
+            text = "Open settings",
+            notCheckable = true,
+            func = function()
+                if ns.SettingsPanel and ns.SettingsPanel.Open then
+                    ns.SettingsPanel:Open()
+                end
+            end,
+        },
+
+        -- Version info (disabled, read-only)
+        {
+            text = "Version " .. addonVer,
+            notClickable = true,
+            notCheckable = true,
+            disabled = true,
+        },
+    }
+
+    EasyMenu(menu, dropdownFrame, "cursor", 0, 0, "MENU")
 end
 
 -- ── Public API ────────────────────────────────────────────────────────
