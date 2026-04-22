@@ -126,12 +126,17 @@ local function attachLabel(entryFrame)
         end
         if ctx.breakdown then
             GameTooltip:AddLine(" ")
-            for k, v in pairs(ctx.breakdown) do
-                GameTooltip:AddDoubleLine(
-                    k,
-                    string.format("%.2f x %.0f%%", v.value,
-                        (v.effectiveWeight or v.weight) * 100),
-                    0.9, 0.9, 0.9, 1, 1, 1)
+            local order = ns.Scoring.COMPONENT_ORDER
+            local labels = ns.Scoring.COMPONENT_LABEL
+            for _, key in ipairs(order) do
+                local v = ctx.breakdown[key]
+                if v then
+                    GameTooltip:AddDoubleLine(
+                        labels[key] or key,
+                        string.format("%.2f x %.0f%%", v.value,
+                            (v.effectiveWeight or v.weight) * 100),
+                        0.9, 0.9, 0.9, 1, 1, 1)
+                end
             end
         end
         GameTooltip:Show()
