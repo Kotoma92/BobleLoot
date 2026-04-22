@@ -832,10 +832,139 @@ function BuildLootDBTab(parent)
 end
 
 function BuildDataTab(parent)
+    local T = ns.Theme
+    local POPUP_TEAM_URL = "BOBLELOOT_SETTINGS_TEAM_URL"
+
     local body = CreateFrame("Frame", nil, parent)
     body:SetAllPoints(parent)
     body:Hide()
     tabBodies["data"] = body
+
+    -- ── Dataset info card ─────────────────────────────────────────────
+    local infoCard, infoInner = MakeSection(body, "Dataset info")
+    infoCard:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
+    infoCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 240)
+
+    local infoLbl = infoInner:CreateFontString(nil, "OVERLAY")
+    infoLbl:SetFont(T.fontBody, T.sizeBody)
+    infoLbl:SetTextColor(T.white[1], T.white[2], T.white[3])
+    infoLbl:SetPoint("TOPLEFT", infoInner, "TOPLEFT", 4, -2)
+    infoLbl:SetWidth(500)
+
+    local function updateInfoLabel()
+        local d = _G.BobleLoot_Data
+        if not d then
+            infoLbl:SetTextColor(T.danger[1], T.danger[2], T.danger[3])
+            infoLbl:SetText("|cffff5555No dataset loaded.|r")
+            return
+        end
+        infoLbl:SetTextColor(T.white[1], T.white[2], T.white[3])
+        local count = 0
+        for _ in pairs(d.characters or {}) do count = count + 1 end
+        infoLbl:SetText(string.format(
+            "Generated: %s\nCharacters loaded: %d\n"
+            .. "Caps (data file):  M+ dungeons = %d  |  History soft floor = %d\n"
+            .. "|cff888888(Sim is uncapped by design)|r",
+            d.generatedAt or "?",
+            count,
+            d.mplusCap   or 0,
+            d.historyCap or 0))
+    end
+
+    -- ── Actions card ──────────────────────────────────────────────────
+    local actCard, actInner = MakeSection(body, "Actions")
+    actCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6,  234)
+    actCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 130)
+
+    -- Broadcast button.
+    MakeButton(actInner, "Broadcast to raid",
+        function()
+            if ns.Sync and ns.Sync.BroadcastNow then
+                ns.Sync:BroadcastNow(addon)
+                addon:Print("announced dataset to raid.")
+            end
+        end, { width = 150, height = 22, x = 4, y = -4 })
+
+    -- WoWAudit team page button (hidden if teamUrl absent).
+    local teamBtn = MakeButton(actInner, "Open WoWAudit team page",
+        function()
+            -- StaticPopup with edit box for ctrl-C copy (mirrors RaidReminder pattern).
+            if not StaticPopupDialogs[POPUP_TEAM_URL] then
+                StaticPopupDialogs[POPUP_TEAM_URL] = {
+                    text         = "Open this URL in your browser (Ctrl+C to copy):",
+                    button1      = OKAY,
+                    hasEditBox   = true,
+                    editBoxWidth = 340,
+                    OnShow = function(self)
+                        local data = _G.BobleLoot_Data
+                        local url  = (data and data.teamUrl) or "https://wowaudit.com"
+                        local eb = self.editBox or self.EditBox
+                        if not eb then return end
+                        eb:SetText(url)
+                        eb:SetFocus()
+                        eb:HighlightText()
+                    end,
+                    EditBoxOnEnterPressed  = function(self) self:GetParent():Hide() end,
+                    EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+                    timeout      = 0,
+                    whileDead    = true,
+                    hideOnEscape = true,
+                    preferredIndex = 3,
+                }
+            end
+            StaticPopup_Show(POPUP_TEAM_URL)
+        end, { width = 190, height = 22, x = 162, y = -4 })
+    teamBtn:Hide()  -- shown conditionally in OnShow
+
+    -- ── Transparency card ─────────────────────────────────────────────
+    local transCard, transInner = MakeSection(body, "Transparency mode")
+    transCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 124)
+    transCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 6)
+
+    local transTog -- toggled in OnShow
+
+    local transHintLbl = transInner:CreateFontString(nil, "OVERLAY")
+    transHintLbl:SetFont(T.fontBody, T.sizeSmall)
+    transHintLbl:SetPoint("TOPLEFT", transInner, "TOPLEFT", 4, -28)
+    transHintLbl:SetWidth(500)
+
+    transTog = MakeToggle(transInner, {
+        label = "Enabled (raid leader only)",
+        x = 4, y = -4,
+        get = function()
+            return addon and addon:IsTransparencyEnabled() or false
+        end,
+        set = function(v)
+            if not addon then return end
+            if not UnitIsGroupLeader("player") then return end
+            addon:SetTransparencyEnabled(v, true)
+        end,
+    })
+
+    -- OnShow re-reads leader state (leadership can change while panel is open).
+    body:SetScript("OnShow", function()
+        updateInfoLabel()
+
+        -- Show/hide team URL button.
+        local d = _G.BobleLoot_Data
+        if d and d.teamUrl then teamBtn:Show() else teamBtn:Hide() end
+
+        -- Transparency toggle enable/hint.
+        local isLeader = UnitIsGroupLeader("player")
+        transTog:SetEnabled(isLeader)
+        transTog:SetChecked(addon and addon:IsTransparencyEnabled() or false)
+        if isLeader then
+            transHintLbl:SetTextColor(T.accentDim[1], T.accentDim[2], T.accentDim[3])
+            transHintLbl:SetText(
+                "You are the group leader. Toggling broadcasts the setting to all "
+                .. "raid members who have Boble Loot installed.")
+        else
+            transHintLbl:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+            transHintLbl:SetText(
+                "Only the raid/group leader can change this. Current state is synced "
+                .. "from the leader automatically.")
+        end
+    end)
 end
 
 function BuildTestTab(parent)
