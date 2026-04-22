@@ -20,17 +20,24 @@ end
 
 local function simComponent(char, itemID, simReference)
     if not char.sims then return nil end
-    local pct = char.sims[itemID]
-    if pct == nil then return nil end
-    -- Per-item comparative normalization: if a reference max (= the
-    -- highest sim percentage for this item among the current bidders)
-    -- is provided, scale value to [0..1] against that. The bidder with
-    -- the biggest upgrade gets 1.0, others scaled proportionally.
+    -- simsKnown is a set of itemIDs for which a sim result exists in the
+    -- dataset, even if that result is zero. Without it, an omitted key
+    -- (wowaudit.py didn't write zero-value entries) is indistinguishable
+    -- from "item was never simmed for this character."
+    --
+    -- Invariant: if simsKnown[itemID] is true, the sim result is known and
+    -- authoritative; char.sims[itemID] may be nil (treat as 0.0) or a
+    -- non-negative percentage. If simsKnown is absent or simsKnown[itemID]
+    -- is falsy, the item has no sim data — return nil (no-data sentinel).
+    local known = char.simsKnown and char.simsKnown[itemID]
+    local pct   = char.sims[itemID]
+    if pct == nil and not known then return nil end
+    -- Item is known (simsKnown[itemID] = true) OR pct is an explicit value.
+    -- Either way we have a result; coerce nil to 0.0.
+    pct = pct or 0.0
     if simReference and simReference > 0 then
         return clamp01(pct / simReference), pct
     end
-    -- No reference (e.g. /bl score from chat): fall back to raw fraction
-    -- so the score is at least monotonic in the upgrade size.
     return pct / 100, pct
 end
 
