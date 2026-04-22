@@ -14,3 +14,6 @@ BobleLoot-*.zip
 
 # Brainstorming companion mockups (local design scratch space).
 .superpowers/
+
+# wowaudit.py endpoint cache (may contain API keys in URL query strings)
+tools/.cache/*.json

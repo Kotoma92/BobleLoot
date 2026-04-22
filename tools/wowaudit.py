@@ -157,6 +157,39 @@ def _validate_endpoint(
         )
 
 # --------------------------------------------------------------------------
+# Cache helpers
+# --------------------------------------------------------------------------
+
+CACHE_DIR = Path(__file__).resolve().parent / ".cache"
+
+
+def _cache_path(label: str) -> Path:
+    """Return the cache file path for a given endpoint label."""
+    # Sanitise label so it is safe as a filename on all platforms.
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in label)
+    return CACHE_DIR / f"{safe}.json"
+
+
+def _write_cache(label: str, data: object) -> None:
+    """Write `data` to the cache file for `label`. Silent on failure."""
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _cache_path(label).write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _read_cache(label: str) -> object | None:
+    """Return cached data for `label`, or None if not found / unreadable."""
+    p = _cache_path(label)
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+# --------------------------------------------------------------------------
 # Lua emitter
 # --------------------------------------------------------------------------
 
@@ -410,6 +443,9 @@ def main():
                     help="WoWAudit team API key (or WOWAUDIT_API_KEY env var, or .env file).")
     ap.add_argument("--dump-raw", type=Path, default=None,
                     help="Directory to also write raw API responses into (debugging).")
+    ap.add_argument("--use-cache", action="store_true",
+                    help="Replay the last successful API responses from "
+                         "tools/.cache/ instead of hitting the network.")
     # Output
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT,
                     help=f"Output .lua path (default: {DEFAULT_OUT}).")

@@ -261,3 +261,52 @@ def test_validate_endpoint_invalid_characters_missing_name():
 def test_load_schema_returns_dict_or_none():
     result = wa._load_schema()
     assert result is None or isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — cache layer
+# ---------------------------------------------------------------------------
+import tempfile
+
+def test_write_and_read_cache(tmp_path, monkeypatch):
+    """_write_cache / _read_cache round-trip using a temp directory."""
+    monkeypatch.setattr(wa, "CACHE_DIR", tmp_path)
+    # Also patch _cache_path to use the monkeypatched CACHE_DIR.
+    original_cache_path = wa._cache_path
+    def patched_cache_path(label):
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in label)
+        return tmp_path / f"{safe}.json"
+    monkeypatch.setattr(wa, "_cache_path", patched_cache_path)
+
+    payload = {"characters": [{"id": 1, "name": "Boble"}]}
+    wa._write_cache("characters", payload)
+    result = wa._read_cache("characters")
+    assert result == payload
+
+
+def test_read_cache_missing_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(wa, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(wa, "_cache_path", lambda label: tmp_path / f"{label}.json")
+    assert wa._read_cache("nonexistent") is None
+
+
+def test_cache_label_sanitisation(tmp_path, monkeypatch):
+    """Labels with special characters (e.g. query strings) are sanitised."""
+    monkeypatch.setattr(wa, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(
+        wa, "_cache_path",
+        lambda label: tmp_path / (
+            "".join(c if c.isalnum() or c in "-_." else "_" for c in label) + ".json"
+        ),
+    )
+    wa._write_cache("attendance?start_date=2026-03-17", {"ok": True})
+    result = wa._read_cache("attendance?start_date=2026-03-17")
+    assert result == {"ok": True}
+
+
+def test_write_cache_silent_on_bad_path(monkeypatch):
+    """_write_cache does not raise when the directory is not writable."""
+    monkeypatch.setattr(wa, "CACHE_DIR", Path("/nonexistent_dir_xyzzy"))
+    monkeypatch.setattr(wa, "_cache_path", lambda _: Path("/nonexistent_dir_xyzzy/x.json"))
+    # Should not raise.
+    wa._write_cache("test", {"data": 1})
