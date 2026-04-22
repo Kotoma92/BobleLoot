@@ -116,24 +116,103 @@ local function attachLabel(entryFrame)
     -- already has scripts (we use HookScript).
     entryFrame:HookScript("OnEnter", function(self)
         local ctx = self[SCORE_FRAME_KEY .. "_ctx"]
-        if not ctx or not ctx.score then return end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine("Boble Loot — your score")
-        GameTooltip:AddDoubleLine("Score", string.format("%.1f / 100", ctx.score),
-            1, 1, 1, 1, 1, 1)
-        if ctx.fromLeader then
-            GameTooltip:AddLine("|cff80c0ffSent by raid leader (authoritative).|r")
+        if not ctx then return end
+        if ctx.notInDataset then
+            local playerName = UnitName("player") or "?"
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine("|cffddddddBoble Loot|r")
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine(string.format(
+                "|cffaaaaaa%s is not in the BobleLoot dataset.|r", playerName))
+            GameTooltip:AddLine(
+                "|cff888888Run tools/wowaudit.py and /reload.|r")
+            GameTooltip:Show()
+            return
         end
+        if not ctx.score then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+
+        -- Title + separator
+        GameTooltip:AddLine("|cffddddddBoble Loot \xe2\x80\x94 your score|r")
+        GameTooltip:AddLine(
+            "|cff444444" .. string.rep("\xe2\x80\x94", 26) .. "|r")
+
+        -- Score line
+        GameTooltip:AddDoubleLine("Score",
+            string.format("%.1f / 100", ctx.score),
+            1, 0.82, 0,  1, 1, 1)
+
+        if ctx.fromLeader then
+            GameTooltip:AddLine(
+                "|cff80c0ffSent by raid leader (authoritative).|r")
+        end
+
+        -- Component breakdown
         if ctx.breakdown then
             GameTooltip:AddLine(" ")
-            for k, v in pairs(ctx.breakdown) do
-                GameTooltip:AddDoubleLine(
-                    k,
-                    string.format("%.2f x %.0f%%", v.value,
-                        (v.effectiveWeight or v.weight) * 100),
-                    0.9, 0.9, 0.9, 1, 1, 1)
+            -- Column header (muted)
+            GameTooltip:AddDoubleLine(
+                "|cff666666Component           (raw stat)|r",
+                "|cff666666wt%    norm   =  pts|r",
+                1, 1, 1,  1, 1, 1)
+
+            local order  = ns.Scoring.COMPONENT_ORDER
+            local labels = ns.Scoring.COMPONENT_LABEL
+            local weights = ns.addon and ns.addon.db
+                            and ns.addon.db.profile
+                            and ns.addon.db.profile.weights or {}
+            local totalConfigW = 0
+            for _, key in ipairs(order) do
+                totalConfigW = totalConfigW + (weights[key] or 0)
+            end
+
+            local excluded = {}
+            for _, key in ipairs(order) do
+                local v = ctx.breakdown[key]
+                if v then
+                    local rawStr
+                    -- Use VotingFrame's formatRaw if accessible, else fallback.
+                    -- LootFrame is in the same addon namespace, so we delegate
+                    -- to a shared helper exposed on ns.VotingFrame.
+                    rawStr = ns.VotingFrame and ns.VotingFrame.formatRaw
+                             and ns.VotingFrame.formatRaw(key, v)
+                             or  string.format("%.2f", v.value or 0)
+                    local left  = string.format("%s |cff666666(%s)|r",
+                                      labels[key] or key, rawStr)
+                    local right = string.format(
+                        "|cffcccccc%2.0f%%|r  |cff6699ff%.2f|r  |cff888888=|r  |cffffffff%4.1f|r",
+                        (v.effectiveWeight or 0) * 100,
+                        v.value or 0,
+                        v.contribution or 0)
+                    GameTooltip:AddDoubleLine(left, right, 0.9, 0.9, 0.9, 1, 1, 1)
+                else
+                    table.insert(excluded, labels[key] or key)
+                end
+            end
+
+            -- Renormalization caveat (2+ excluded)
+            if #excluded >= 2 then
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("|cff808080Excluded: "
+                    .. table.concat(excluded, ", ") .. "|r")
+                local activeW = 0
+                for _, key in ipairs(order) do
+                    if ctx.breakdown[key] then
+                        activeW = activeW + (weights[key] or 0)
+                    end
+                end
+                if totalConfigW > 0 and activeW < totalConfigW then
+                    local pct = math.floor(activeW / totalConfigW * 100 + 0.5)
+                    GameTooltip:AddLine(string.format(
+                        "|cff808080Score over %d%% of configured weights.|r", pct))
+                end
+            elseif #excluded == 1 then
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("|cff666666Excluded: "
+                    .. table.concat(excluded, ", ") .. "|r")
             end
         end
+
         GameTooltip:Show()
     end)
     entryFrame:HookScript("OnLeave", function() GameTooltip:Hide() end)
@@ -154,9 +233,17 @@ local function renderEntry(addon, entry, entryFrame)
     local data = addon:GetData()
     local key  = lookupChar(data)
     local iid  = entryItemID(entry)
-    if not key or not iid then
+    if not iid then
         fs:SetText("")
         entryFrame[SCORE_FRAME_KEY .. "_ctx"] = nil
+        return
+    end
+    if not key then
+        -- Player is not in dataset. Show muted label + explanatory tooltip.
+        local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
+        fs:SetText(string.format("|cff%02x%02x%02xBL: \xe2\x80\x94|r",
+            math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255)))
+        entryFrame[SCORE_FRAME_KEY .. "_ctx"] = { notInDataset = true }
         return
     end
 

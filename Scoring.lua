@@ -99,6 +99,19 @@ local function mplusComponent(char, mplusCap)
     return clamp01(v / mplusCap), v
 end
 
+-- Ordered list of component keys for UI iteration. Both VotingFrame.lua
+-- and LootFrame.lua consume this so ordering is always consistent.
+ns.Scoring.COMPONENT_ORDER = { "sim", "bis", "history", "attendance", "mplus" }
+
+-- Human-readable label for each component key.
+ns.Scoring.COMPONENT_LABEL = {
+    sim        = "Sim upgrade",
+    bis        = "BiS",
+    history    = "Loot received",
+    attendance = "Attendance",
+    mplus      = "M+ dungeons",
+}
+
 -- Public --------------------------------------------------------------------
 
 -- Compute a 0..100 score for (itemID, candidateName).
