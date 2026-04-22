@@ -265,6 +265,9 @@ local function formatRaw(key, entry)
     return "-"
 end
 
+-- Expose for LootFrame.lua's transparency tooltip.
+VF.formatRaw = formatRaw
+
 local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef,
                                  sessionMedian, sessionMax)
     local inDs = isInDataset(addon, name)
@@ -276,34 +279,56 @@ local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef,
         tt:AddLine("|cff888888Run tools/wowaudit.py and /reload.|r")
         return
     end
-    -- ... rest of tooltip (rewritten in Task 7) ...
+
     local s, breakdown = addon:GetScore(itemID, name, {
         simReference     = simRef,
         historyReference = histRef,
     })
-    tt:AddLine("Boble Loot")
-    tt:AddDoubleLine(name or "?",
+
+    -- Title + separator
+    tt:AddLine("|cffddddddBoble Loot|r")
+    tt:AddLine("|cff444444" .. string.rep("\xe2\x80\x94", 26) .. "|r")
+
+    -- Name + total score
+    tt:AddDoubleLine(
+        name or "?",
         s and string.format("%.1f / 100", s) or "|cffff7070no data|r",
-        1, 0.82, 0, 1, 1, 1)
+        1, 0.82, 0,   1, 1, 1)
+
     if not s then
-        tt:AddLine("|cffff7070No data for this candidate/item.|r")
+        tt:AddLine("|cffff7070No scoreable components for this candidate/item.|r")
         return
     end
 
     tt:AddLine(" ")
-    tt:AddLine("|cffaaaaaaComponent          weight  norm   = pts|r")
 
-    local sumContrib = 0
-    for _, key in ipairs(getComponentOrder()) do
+    -- Column header row (muted)
+    tt:AddDoubleLine(
+        "|cff666666Component           (raw stat)|r",
+        "|cff666666wt%    norm   =  pts|r",
+        1, 1, 1,  1, 1, 1)
+
+    local sumContrib   = 0
+    local activeCount  = 0
+    local totalConfigW = 0
+    local order  = ns.Scoring.COMPONENT_ORDER
+    local labels = ns.Scoring.COMPONENT_LABEL
+    local weights = addon.db and addon.db.profile and addon.db.profile.weights or {}
+
+    for _, key in ipairs(order) do
+        totalConfigW = totalConfigW + (weights[key] or 0)
+    end
+
+    for _, key in ipairs(order) do
         local e = breakdown[key]
         if e then
-            sumContrib = sumContrib + (e.contribution or 0)
-            local left = string.format(
-                "%s |cff888888(%s)|r",
-                getComponentLabel()[key] or key,
-                formatRaw(key, e))
-            local right = string.format(
-                "|cffcccccc%2.0f%%|r x |cffcccccc%.2f|r = |cffffffff%4.1f|r",
+            activeCount  = activeCount + 1
+            sumContrib   = sumContrib + (e.contribution or 0)
+            local rawStr = formatRaw(key, e)
+            local left   = string.format("%s |cff666666(%s)|r",
+                               labels[key] or key, rawStr)
+            local right  = string.format(
+                "|cffcccccc%2.0f%%|r  |cff6699ff%.2f|r  |cff888888=|r  |cffffffff%4.1f|r",
                 (e.effectiveWeight or 0) * 100,
                 e.value or 0,
                 e.contribution or 0)
@@ -311,23 +336,56 @@ local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef,
         end
     end
 
-    -- List components that were dropped (no data or weight 0) so the
-    -- raid leader knows the renormalization is doing work.
-    local missing = {}
-    for _, key in ipairs(getComponentOrder()) do
+    -- Excluded components
+    local excluded = {}
+    for _, key in ipairs(order) do
         if not breakdown[key] then
-            table.insert(missing, getComponentLabel()[key] or key)
+            table.insert(excluded, labels[key] or key)
         end
-    end
-    if #missing > 0 then
-        tt:AddLine(" ")
-        tt:AddLine("|cff808080Excluded (no data or weight 0): "
-            .. table.concat(missing, ", ") .. "|r")
     end
 
     tt:AddLine(" ")
-    tt:AddDoubleLine("Total", string.format("%.1f / 100", sumContrib),
-        1, 0.82, 0, 1, 1, 1)
+
+    -- Renormalization caveat: show only when 2+ components are excluded.
+    if #excluded >= 2 then
+        tt:AddLine("|cff808080Excluded (no data): "
+            .. table.concat(excluded, ", ") .. "|r")
+        -- activeWeightSum = sum of configured weights for active components
+        local activeWeightSum = 0
+        for _, key in ipairs(order) do
+            if breakdown[key] then
+                activeWeightSum = activeWeightSum + (weights[key] or 0)
+            end
+        end
+        if totalConfigW > 0 and activeWeightSum < totalConfigW then
+            local pct = math.floor(activeWeightSum / totalConfigW * 100 + 0.5)
+            tt:AddLine(string.format(
+                "|cff808080Score over %d%% of configured weights.|r", pct))
+        end
+    elseif #excluded == 1 then
+        -- One excluded: mention it but no caveat line.
+        tt:AddLine("|cff666666Excluded (no data): "
+            .. table.concat(excluded, ", ") .. "|r")
+    end
+
+    -- Raid context footer
+    if sessionMedian or sessionMax then
+        tt:AddLine(" ")
+        local parts = {}
+        if sessionMedian then
+            table.insert(parts,
+                string.format("Median |cffffffff%d|r", math.floor(sessionMedian + 0.5)))
+        end
+        if sessionMax then
+            table.insert(parts,
+                string.format("Max |cffffffff%d|r", math.floor(sessionMax + 0.5)))
+        end
+        if s then
+            table.insert(parts,
+                string.format("This: |cffffffff%d|r", math.floor(s + 0.5)))
+        end
+        tt:AddLine("|cffaaaaaa" .. table.concat(parts, " | ") .. "|r")
+    end
 end
 
 local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, column,
