@@ -17,3 +17,6 @@ BobleLoot-*.zip
 
 # wowaudit.py endpoint cache (may contain API keys in URL query strings)
 tools/.cache/*.json
+
+# Claude Code local state (agent worktrees, tasks, etc).
+.claude/
