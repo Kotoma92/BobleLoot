@@ -611,3 +611,27 @@ def test_count_zero_sim_chars():
     assert "A-Realm" in result
     assert "C-Realm" in result
     assert "B-Realm" not in result
+
+
+# ---------------------------------------------------------------------------
+# Task 11 — fetch_team_url hardening
+# ---------------------------------------------------------------------------
+
+def test_fetch_team_url_returns_url(monkeypatch):
+    monkeypatch.setattr(wa, "http_get_json", lambda path, key: {"url": "https://wowaudit.com/teams/123"})
+    result = wa.fetch_team_url("fake-key")
+    assert result == "https://wowaudit.com/teams/123"
+
+
+def test_fetch_team_url_returns_none_on_error(monkeypatch):
+    def raise_error(path, key):
+        raise urllib.error.URLError("refused")
+    monkeypatch.setattr(wa, "http_get_json", raise_error)
+    result = wa.fetch_team_url("fake-key")
+    assert result is None
+
+
+def test_fetch_team_url_returns_none_when_url_missing(monkeypatch):
+    monkeypatch.setattr(wa, "http_get_json", lambda path, key: {"name": "My Team"})
+    result = wa.fetch_team_url("fake-key")
+    assert result is None
