@@ -233,9 +233,17 @@ local function renderEntry(addon, entry, entryFrame)
     local data = addon:GetData()
     local key  = lookupChar(data)
     local iid  = entryItemID(entry)
-    if not key or not iid then
+    if not iid then
         fs:SetText("")
         entryFrame[SCORE_FRAME_KEY .. "_ctx"] = nil
+        return
+    end
+    if not key then
+        -- Player is not in dataset. Show muted label + explanatory tooltip.
+        local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
+        fs:SetText(string.format("|cff%02x%02x%02xBL: \xe2\x80\x94|r",
+            math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255)))
+        entryFrame[SCORE_FRAME_KEY .. "_ctx"] = { notInDataset = true }
         return
     end
 
