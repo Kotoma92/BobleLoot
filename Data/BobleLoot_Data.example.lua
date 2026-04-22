@@ -10,7 +10,6 @@ BobleLoot_Data = {
         ["Examplechar-Examplerealm"] = {
             attendance    = 100.0,
             mplusDungeons = 0,
-            itemsReceived = 0,
             bis  = { [12345] = true },
             sims = { [12345] = 1.23 },
         },

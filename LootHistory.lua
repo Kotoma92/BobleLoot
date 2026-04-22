@@ -1,8 +1,8 @@
 --[[ LootHistory.lua
-     Reads RCLootCouncil's own loot history (`RCLootCouncil.lootDB`) and
-     overrides each character's `itemsReceived` count. The wowaudit public
-     API doesn't expose loot history, but RC has it locally — and it's
-     more accurate (current to the last awarded item) than a pull anyway.
+     Sole source of `char.itemsReceived`. Reads RCLootCouncil's own loot
+     history (`RCLootCouncil.lootDB`) on load and on awards. The wowaudit
+     public API doesn't expose loot history, so the generated data file
+     no longer carries this field at all — LootHistory populates it.
 
      Each awarded entry is classified into one of:
         bis      -- "BiS" response
@@ -16,7 +16,9 @@
 
      The resulting weighted sum is written to `char.itemsReceived`, and a
      per-category breakdown is stored on `char.itemsReceivedBreakdown`
-     for the score tooltip.
+     for the score tooltip. Until LootHistory has run for a character,
+     `itemsReceived` is nil and the history component is excluded from
+     the score (see Scoring.lua:historyComponent).
 ]]
 
 local _, ns = ...

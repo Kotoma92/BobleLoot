@@ -68,7 +68,7 @@ _load_dotenv()
 # --------------------------------------------------------------------------
 
 DEFAULT_OUT = Path(__file__).resolve().parent.parent / "Data" / "BobleLoot_Data.lua"
-REQUIRED_COLS = {"character", "mplus_dungeons", "attendance", "items_received"}
+REQUIRED_COLS = {"character", "mplus_dungeons", "attendance"}
 
 API_BASE = "https://wowaudit.com/v1"
 
@@ -159,12 +159,10 @@ def build_lua(
             continue
         attendance = _to_float(row.get("attendance"))
         mplus      = _to_int(row.get("mplus_dungeons"))
-        received   = _to_int(row.get("items_received"))
 
         out.append(f'        ["{_lua_escape(name)}"] = {{')
         out.append(f"            attendance    = {attendance},")
         out.append(f"            mplusDungeons = {mplus},")
-        out.append(f"            itemsReceived = {received},")
 
         bis_ids = bis.get(name) or []
         if bis_ids:
@@ -334,7 +332,6 @@ def fetch_rows(api_key: str, dump_dir: Path | None) -> list[dict]:
             "character":      full,
             "mplus_dungeons": dungeons_by_id.get(cid, 0),
             "attendance":     attendance_by_id.get(cid, 0),
-            "items_received": 0,  # wowaudit API doesn't expose this; supply via convert mode if needed
         }
         for iid, score in (sims_by_id.get(cid) or {}).items():
             row[f"sim_{iid}"] = score
