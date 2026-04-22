@@ -968,8 +968,94 @@ function BuildDataTab(parent)
 end
 
 function BuildTestTab(parent)
+    local T = ns.Theme
+
     local body = CreateFrame("Frame", nil, parent)
     body:SetAllPoints(parent)
     body:Hide()
     tabBodies["test"] = body
+
+    local card, inner = MakeSection(body, "Test session")
+    card:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
+    card:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 6)
+
+    local descLbl = inner:CreateFontString(nil, "OVERLAY")
+    descLbl:SetFont(T.fontBody, T.sizeSmall)
+    descLbl:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    descLbl:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -2)
+    descLbl:SetWidth(500)
+    descLbl:SetText(
+        "Opens an RCLootCouncil test session so you can verify the Boble Loot score "
+        .. "column live. Requires RCLootCouncil and group leader (or solo).")
+
+    -- Item count slider.
+    MakeSlider(inner, {
+        label = "Number of items",
+        min = 1, max = 20, step = 1, isPercent = false,
+        width = 260, x = 4, y = -30,
+        get = function() return (addon and addon.db.profile.testItemCount) or 5 end,
+        set = function(v)
+            if addon then addon.db.profile.testItemCount = math.floor(v) end
+        end,
+    })
+
+    -- Use dataset items toggle.
+    MakeToggle(inner, {
+        label = "Use items from BobleLoot dataset (when available)",
+        x = 4, y = -76,
+        get = function()
+            return (addon and addon.db.profile.testUseDatasetItems) ~= false
+        end,
+        set = function(v)
+            if addon then addon.db.profile.testUseDatasetItems = v and true or false end
+        end,
+    })
+
+    -- Reason label (shown when button is disabled).
+    local reasonLbl = inner:CreateFontString(nil, "OVERLAY")
+    reasonLbl:SetFont(T.fontBody, T.sizeSmall)
+    reasonLbl:SetTextColor(T.warning[1], T.warning[2], T.warning[3])
+    reasonLbl:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -108)
+    reasonLbl:SetWidth(460)
+    reasonLbl:SetText("")
+
+    -- Run button.
+    local runBtn = MakeButton(inner, "Run test session",
+        function()
+            if not (ns.TestRunner and ns.TestRunner.Run) then return end
+            ns.TestRunner:Run(addon,
+                (addon.db.profile.testItemCount or 5),
+                (addon.db.profile.testUseDatasetItems ~= false))
+        end, { width = 150, height = 24, x = 4, y = -120 })
+
+    local function checkRunnable()
+        -- Determine disable reason, if any.
+        local RCAceAddon = LibStub and LibStub("AceAddon-3.0", true)
+        local RC
+        if RCAceAddon then
+            local ok, r = pcall(function()
+                return RCAceAddon:GetAddon("RCLootCouncil", true)
+            end)
+            RC = ok and r or nil
+        end
+
+        local reason = nil
+        if not RC then
+            reason = "RCLootCouncil is not loaded. The test session requires RC."
+        elseif IsInGroup() and not UnitIsGroupLeader("player") then
+            reason = "You must be the group leader (or solo) to start a test session."
+        end
+
+        if reason then
+            runBtn:SetEnabled(false)
+            reasonLbl:SetText(reason)
+        else
+            runBtn:SetEnabled(true)
+            reasonLbl:SetText("")
+        end
+    end
+
+    body:SetScript("OnShow", function()
+        checkRunnable()
+    end)
 end
