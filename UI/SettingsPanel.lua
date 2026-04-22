@@ -635,10 +635,103 @@ function BuildWeightsTab(parent)
 end
 
 function BuildTuningTab(parent)
+    local T = ns.Theme
+
     local body = CreateFrame("Frame", nil, parent)
     body:SetAllPoints(parent)
     body:Hide()
     tabBodies["tuning"] = body
+
+    local card, inner = MakeSection(body, "Scoring tuning")
+    card:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
+    card:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 6)
+
+    -- Track control references for conditional show/hide.
+    local simCapSld, mplusCapSld, histCapSld
+
+    -- Partial-BiS slider.
+    MakeSlider(inner, {
+        label = "BiS partial credit (non-BiS items)",
+        min = 0, max = 1, step = 0.05, isPercent = true,
+        width = 280, x = 4, y = -4,
+        get = function() return (addon and addon.db.profile.partialBiSValue) or 0.25 end,
+        set = function(v)
+            if addon then addon.db.profile.partialBiSValue = v end
+        end,
+    })
+
+    -- Override caps toggle.
+    local overrideTog = MakeToggle(inner, {
+        label = "Override caps from data file",
+        x = 4, y = -52,
+        get = function() return (addon and addon.db.profile.overrideCaps) or false end,
+        set = function(v)
+            if addon then addon.db.profile.overrideCaps = v end
+            -- Dim or enable the three cap sliders.
+            if simCapSld  then simCapSld:SetEnabled(v)  end
+            if mplusCapSld then mplusCapSld:SetEnabled(v) end
+            if histCapSld  then histCapSld:SetEnabled(v)  end
+        end,
+    })
+
+    -- Sim cap slider.
+    simCapSld = MakeSlider(inner, {
+        label = "Sim upgrade cap (% -> 100)",
+        min = 0.5, max = 20, step = 0.5, isPercent = false,
+        width = 280, x = 4, y = -82,
+        get = function() return (addon and addon.db.profile.simCap) or 5.0 end,
+        set = function(v)
+            if addon then addon.db.profile.simCap = v end
+        end,
+    })
+
+    -- M+ cap slider.
+    mplusCapSld = MakeSlider(inner, {
+        label = "M+ dungeons cap (count -> 100)",
+        min = 5, max = 200, step = 1, isPercent = false,
+        width = 280, x = 4, y = -128,
+        get = function() return (addon and addon.db.profile.mplusCap) or 40 end,
+        set = function(v)
+            if addon then addon.db.profile.mplusCap = v end
+        end,
+    })
+
+    -- History soft-floor slider.
+    histCapSld = MakeSlider(inner, {
+        label = "Loot equity soft floor",
+        min = 1, max = 20, step = 1, isPercent = false,
+        width = 280, x = 4, y = -174,
+        get = function() return (addon and addon.db.profile.historyCap) or 5 end,
+        set = function(v)
+            if addon then addon.db.profile.historyCap = v end
+        end,
+    })
+
+    -- Loot history window slider.
+    MakeSlider(inner, {
+        label = "Loot history window (days, 0 = all time)",
+        min = 0, max = 180, step = 1, isPercent = false,
+        width = 280, x = 4, y = -220,
+        get = function() return (addon and addon.db.profile.lootHistoryDays) or 28 end,
+        set = function(v)
+            if addon then
+                addon.db.profile.lootHistoryDays = v
+                -- Mirror Config.lua behavior: re-run loot history on change.
+                if ns.LootHistory and ns.LootHistory.Apply then
+                    ns.LootHistory:Apply(addon)
+                end
+            end
+        end,
+    })
+
+    -- Refresh state on tab show.
+    body:SetScript("OnShow", function()
+        if not addon then return end
+        local oc = addon.db.profile.overrideCaps
+        if simCapSld  then simCapSld:SetEnabled(oc)  end
+        if mplusCapSld then mplusCapSld:SetEnabled(oc) end
+        if histCapSld  then histCapSld:SetEnabled(oc)  end
+    end)
 end
 
 function BuildLootDBTab(parent)
