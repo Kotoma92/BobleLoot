@@ -14,7 +14,7 @@ local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
-BobleLoot.version = "1.0.0"
+BobleLoot.version = "1.0.1"
 
 local DB_DEFAULTS = {
     profile = {
@@ -189,12 +189,17 @@ function BobleLoot:OnSlashCommand(input)
         else
             self:Print("LootHistory module not loaded.")
         end
+    elseif input:match("^debugchar%s+") then
+        local name = input:match("^debugchar%s+(.+)$")
+        if ns.LootHistory and ns.LootHistory.DiagnoseChar then
+            ns.LootHistory:DiagnoseChar(self, name)
+        end
     elseif input == "test" or input:match("^test%s+%d+$") then
         local n = tonumber(input:match("^test%s+(%d+)$")) or self.db.profile.testItemCount or 5
         if ns.TestRunner and ns.TestRunner.Run then
             ns.TestRunner:Run(self, n, self.db.profile.testUseDatasetItems)
         end
     else
-        self:Print("Commands: /bl config | /bl version | /bl broadcast | /bl transparency on|off | /bl checkdata | /bl lootdb | /bl test [N] | /bl score <itemID> <Name-Realm>")
+        self:Print("Commands: /bl config | /bl version | /bl broadcast | /bl transparency on|off | /bl checkdata | /bl lootdb | /bl debugchar <Name-Realm> | /bl test [N] | /bl score <itemID> <Name-Realm>")
     end
 end

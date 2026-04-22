@@ -124,12 +124,19 @@ local function mergeFactionRealms(fr)
             sources[#sources + 1] = frName
             for charName, entries in pairs(perRealm) do
                 if type(entries) == "table" then
-                    if merged[charName] then
-                        for _, e in ipairs(entries) do
-                            merged[charName][#merged[charName] + 1] = e
-                        end
-                    else
-                        merged[charName] = entries
+                    -- IMPORTANT: never alias the original RC table here.
+                    -- A previous version set `merged[charName] = entries`
+                    -- and then appended to it on a second factionrealm
+                    -- match, which mutated RC's own SavedVariables and
+                    -- accumulated duplicates on every re-Apply (every
+                    -- /reload, PLAYER_ENTERING_WORLD, CHAT_MSG_LOOT...).
+                    local dst = merged[charName]
+                    if not dst then
+                        dst = {}
+                        merged[charName] = dst
+                    end
+                    for _, e in ipairs(entries) do
+                        dst[#dst + 1] = e
                     end
                 end
             end
@@ -320,6 +327,150 @@ function LH:Diagnose(addon)
     end
 end
 
+-- Per-character deep diagnostic. Walks the live RC db for the given
+-- character key and prints, step by step, how many entries pass each
+-- filter and how they classify. Helps explain a bogus tooltip number.
+function LH:DiagnoseChar(addon, name)
+    if not name or name == "" then
+        addon:Print("usage: /bl debugchar Name-Realm"); return
+    end
+    local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
+    local db, source = getRCLootDB(RC)
+    addon:Print("Source: " .. (source or "?"))
+    if not db then addon:Print("|cffff5555no db|r"); return end
+    local entries = db[name]
+    if type(entries) ~= "table" then
+        -- case-insensitive / substring fallback
+        local lname = name:lower()
+        local exact, partial
+        for k, v in pairs(db) do
+            if type(k) == "string" and type(v) == "table" then
+                if k:lower() == lname then exact = k
+                elseif k:lower():find(lname, 1, true) then partial = partial or k end
+            end
+        end
+        local resolved = exact or partial
+        if resolved then
+            addon:Print("|cffaaaaaaresolved '"..name.."' -> '"..resolved.."'|r")
+            name, entries = resolved, db[resolved]
+        else
+            addon:Print("|cffff5555no entries for "..name.."|r")
+            local sample, n = {}, 0
+            for k in pairs(db) do
+                n = n + 1
+                if #sample < 12 then sample[#sample+1] = k end
+            end
+            addon:Print(string.format("db has %d keys. sample: %s", n, table.concat(sample, ", ")))
+            return
+        end
+    end
+    local profile = addon.db.profile
+    local days    = profile.lootHistoryDays or DEFAULT_DAYS
+    local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
+    local weights = effectiveWeights(profile)
+    local cutoff  = (days and days > 0) and (time() - days * 24 * 3600) or nil
+    local total, arrayLen = 0, 0
+    for _ in pairs(entries) do total = total + 1 end
+    for _ in ipairs(entries) do arrayLen = arrayLen + 1 end
+    addon:Print(string.format(
+        "%s: pairs=%d, ipairs=%d  (filters: days=%s, minIlvl=%d)",
+        name, total, arrayLen, tostring(days), minIlvl))
+    local responses, classified = {}, { bis=0, major=0, mainspec=0, minor=0 }
+    local kept, droppedTime, droppedIlvl, droppedClass = 0, 0, 0, 0
+    for _, e in ipairs(entries) do
+        if type(e) == "table" then
+            local r = tostring(e.response or e.responseID or "<nil>")
+            responses[r] = (responses[r] or 0) + 1
+            local cat = classify(e)
+            if not cat then
+                droppedClass = droppedClass + 1
+            else
+                local t = entryTime(e)
+                local timeOk = (not cutoff) or (not t) or t >= cutoff
+                local ilvl = entryItemLevel(e)
+                local ilvlOk = (minIlvl <= 0) or (ilvl == nil) or (ilvl >= minIlvl)
+                if not timeOk then droppedTime = droppedTime + 1
+                elseif not ilvlOk then droppedIlvl = droppedIlvl + 1
+                else
+                    kept = kept + 1
+                    classified[cat] = classified[cat] + 1
+                end
+            end
+        end
+    end
+    addon:Print(string.format(
+        "kept=%d  dropped: byClassify=%d byTime=%d byIlvl=%d",
+        kept, droppedClass, droppedTime, droppedIlvl))
+    local rparts = {}
+    for r, c in pairs(responses) do rparts[#rparts+1] = string.format("%s=%d", r, c) end
+    table.sort(rparts)
+    addon:Print("response breakdown: " .. table.concat(rparts, ", "))
+    local weighted = 0
+    local cparts = {}
+    for _, k in ipairs({"bis","major","mainspec","minor"}) do
+        weighted = weighted + classified[k] * (weights[k] or 0)
+        cparts[#cparts+1] = string.format("%s=%d", k, classified[k])
+    end
+    addon:Print(string.format("classified: %s  -> weighted=%.1f",
+        table.concat(cparts, " "), weighted))
+    local data = addon:GetData()
+    local char = data and data.characters and data.characters[name]
+    if char then
+        local b = char.itemsReceivedBreakdown
+        local bs = b and string.format("bis=%d major=%d mainspec=%d minor=%d",
+            b.bis or 0, b.major or 0, b.mainspec or 0, b.minor or 0) or "<nil>"
+        addon:Print(string.format(
+            "stored on data.characters[%s]: itemsReceived=%s  breakdown=%s",
+            name, tostring(char.itemsReceived), bs))
+    else
+        addon:Print("no entry in BobleLoot_Data.characters for " .. name)
+    end
+end
+
+-- One-shot dedup of the live RC saved-variables table. A previous
+-- version of mergeFactionRealms (BobleLoot < 1.0.1) aliased RC's
+-- per-character entry array and then appended a second factionrealm's
+-- entries into it, growing RC's own SavedVariables on every Apply().
+-- This walks RCLootCouncilLootDB.factionrealm[*][*] and removes any
+-- duplicate entries (same (date, time, lootWon/link, response)) so
+-- the next SavedVariables write doesn't persist the corruption.
+-- Returns total entries removed.
+function LH:DedupRCSavedVar()
+    local fr = _G.RCLootCouncilLootDB and _G.RCLootCouncilLootDB.factionrealm
+    if type(fr) ~= "table" then return 0 end
+    local removed = 0
+    for _, perRealm in pairs(fr) do
+        if type(perRealm) == "table" then
+            for charName, entries in pairs(perRealm) do
+                if type(entries) == "table" and #entries > 0 then
+                    local seen, kept = {}, {}
+                    for _, e in ipairs(entries) do
+                        if type(e) == "table" then
+                            local key = table.concat({
+                                tostring(e.date or ""), tostring(e.time or ""),
+                                tostring(e.lootWon or e.link or e.itemLink or ""),
+                                tostring(e.response or e.responseID or ""),
+                                tostring(e.owner or ""),
+                            }, "|")
+                            if not seen[key] then
+                                seen[key] = true
+                                kept[#kept + 1] = e
+                            else
+                                removed = removed + 1
+                            end
+                        end
+                    end
+                    if #kept ~= #entries then
+                        for i = #entries, 1, -1 do entries[i] = nil end
+                        for i, e in ipairs(kept) do entries[i] = e end
+                    end
+                end
+            end
+        end
+    end
+    return removed
+end
+
 function LH:Setup(addon)
     self.addon = addon
     -- Apply once after a short delay so RC has fully loaded its DB.
@@ -328,7 +479,18 @@ function LH:Setup(addon)
     local f = CreateFrame("Frame")
     f:RegisterEvent("CHAT_MSG_LOOT")
     f:RegisterEvent("PLAYER_ENTERING_WORLD")
-    f:SetScript("OnEvent", function()
+    f:RegisterEvent("PLAYER_LOGOUT")
+    f:SetScript("OnEvent", function(_, event)
+        if event == "PLAYER_LOGOUT" then
+            -- Last-chance dedup before SavedVariables get written.
+            local n = LH:DedupRCSavedVar()
+            if n > 0 and addon and addon.Print then
+                addon:Print(string.format(
+                    "BobleLoot: removed %d duplicate RC loot entr%s before save.",
+                    n, n == 1 and "y" or "ies"))
+            end
+            return
+        end
         if self.lastApply and (time() - self.lastApply) < 10 then return end
         C_Timer.After(2, function() self:Apply(addon) end)
     end)
