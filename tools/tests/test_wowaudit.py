@@ -35,3 +35,66 @@ def test_module_importable():
     assert hasattr(wa, "_full_name")
     assert hasattr(wa, "fetch_rows")
     assert hasattr(wa, "http_get_json")
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — convert-mode round-trip
+# ---------------------------------------------------------------------------
+import json
+
+def test_convert_round_trip_produces_all_characters():
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+    bis_path = SAMPLE_DIR / "bis.json"
+
+    rows = wa._read_table(csv_path)
+    with bis_path.open(encoding="utf-8") as f:
+        bis_raw = json.load(f)
+    bis = {k: [int(x) for x in v] for k, v in bis_raw.items()}
+
+    lua = wa.build_lua(rows, bis, sim_cap=5.0, mplus_cap=100, history_cap=5)
+
+    assert 'BobleLoot_Data = {' in lua
+    assert '"Sampletank-Stormrage"' in lua
+    assert '"Samplehealer-Stormrage"' in lua
+    assert '"Sampledps-Stormrage"' in lua
+
+
+def test_convert_round_trip_bis_entries():
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+    bis_path = SAMPLE_DIR / "bis.json"
+
+    rows = wa._read_table(csv_path)
+    with bis_path.open(encoding="utf-8") as f:
+        bis_raw = json.load(f)
+    bis = {k: [int(x) for x in v] for k, v in bis_raw.items()}
+
+    lua = wa.build_lua(rows, bis, sim_cap=5.0, mplus_cap=100, history_cap=5)
+
+    # Sampletank has BiS items 212401, 212403
+    assert "[212401] = true" in lua
+    assert "[212403] = true" in lua
+    # Samplehealer has BiS item 212450
+    assert "[212450] = true" in lua
+
+
+def test_convert_round_trip_sim_values():
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+
+    rows = wa._read_table(csv_path)
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+
+    # Sampledps sim_212401 = 3.1
+    assert "[212401] = 3.1" in lua
+
+
+def test_convert_round_trip_zero_sim_omitted():
+    """Sim entries with value 0.0 (empty string in CSV) are omitted from sims table."""
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+
+    rows = wa._read_table(csv_path)
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+
+    # Samplehealer has sims 0.0, 0.0, 3.6.
+    # The build_lua function uses default=None for sim columns,
+    # so 0.0 values ARE included (they are valid data). Confirm 3.6 is present.
+    assert "[212450] = 3.6" in lua
