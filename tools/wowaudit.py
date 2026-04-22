@@ -77,6 +77,12 @@ API_BASE = "https://wowaudit.com/v1"
 # --------------------------------------------------------------------------
 
 def _read_table(path: Path) -> list[dict]:
+    """Read a CSV or XLSX file into a list of dicts.
+
+    For XLSX files, requires openpyxl (sys.exit with install hint if absent —
+    this is an unrecoverable user-input error, not a network partial failure,
+    so sys.exit is acceptable here per Batch 1A design decision).
+    """
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xls"}:
         try:

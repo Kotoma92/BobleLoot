@@ -635,3 +635,47 @@ def test_fetch_team_url_returns_none_when_url_missing(monkeypatch):
     monkeypatch.setattr(wa, "http_get_json", lambda path, key: {"name": "My Team"})
     result = wa.fetch_team_url("fake-key")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Task 12 — _read_table CSV edge cases
+# ---------------------------------------------------------------------------
+
+def test_read_table_valid_csv(tmp_path):
+    csv_file = tmp_path / "test.csv"
+    csv_file.write_text(
+        "character,mplus_dungeons,attendance\n"
+        "Boble-Stormrage,42,95.0\n",
+        encoding="utf-8",
+    )
+    rows = wa._read_table(csv_file)
+    assert len(rows) == 1
+    assert rows[0]["character"] == "Boble-Stormrage"
+    assert rows[0]["mplus_dungeons"] == "42"
+
+
+def test_read_table_empty_csv(tmp_path):
+    csv_file = tmp_path / "empty.csv"
+    csv_file.write_text("character,mplus_dungeons,attendance\n", encoding="utf-8")
+    rows = wa._read_table(csv_file)
+    assert rows == []
+
+
+def test_read_table_utf8_bom(tmp_path):
+    """CSV files with UTF-8 BOM (common Excel export) are read correctly."""
+    csv_file = tmp_path / "bom.csv"
+    # utf-8-sig BOM prefix.
+    csv_file.write_bytes(
+        b"\xef\xbb\xbfcharacter,mplus_dungeons,attendance\n"
+        b"Boble-Stormrage,10,80.0\n"
+    )
+    rows = wa._read_table(csv_file)
+    assert rows[0]["character"] == "Boble-Stormrage"
+
+
+def test_read_table_sample_input():
+    """The existing sample_input/wowaudit.csv is readable."""
+    csv_path = SAMPLE_DIR / "wowaudit.csv"
+    rows = wa._read_table(csv_path)
+    assert len(rows) == 3
+    assert rows[0]["character"] == "Sampletank-Stormrage"
