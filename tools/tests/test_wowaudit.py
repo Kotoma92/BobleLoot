@@ -465,3 +465,149 @@ def test_fetch_rows_warnings_appear_in_build_lua_output(monkeypatch):
 
     assert "-- WARNING: wishlists: HTTP 503" in lua
     assert "dataWarnings" in lua
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — run report
+# ---------------------------------------------------------------------------
+
+def test_build_run_report_no_prev_file(tmp_path):
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+    rows = wa._read_table(csv_path)
+    bis = {"Sampletank-Stormrage": [212401]}
+
+    report = wa._build_run_report(
+        rows, bis, mplus_cap=100,
+        fetch_warnings=[],
+        prev_lua_path=None,
+    )
+
+    assert "Characters this run" in report
+    assert "3" in report  # three characters
+    assert "M+ cap : 100" in report
+    assert "Warnings : none" in report
+
+
+def test_build_run_report_added_and_removed(tmp_path):
+    # Write a fake old Lua file with only one character.
+    old_lua = (
+        'BobleLoot_Data = {\n'
+        '    ["Sampletank-Stormrage"] = {\n'
+        '        bis = {},\n'
+        '    },\n'
+        '}\n'
+    )
+    lua_path = tmp_path / "BobleLoot_Data.lua"
+    lua_path.write_text(old_lua, encoding="utf-8")
+
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+    rows = wa._read_table(csv_path)
+
+    report = wa._build_run_report(
+        rows, {}, mplus_cap=100,
+        fetch_warnings=[],
+        prev_lua_path=lua_path,
+    )
+
+    assert "Added" in report
+    # Samplehealer and Sampledps are new.
+    assert "Samplehealer-Stormrage" in report
+    assert "Sampledps-Stormrage" in report
+
+
+def test_build_run_report_mplus_cap_change(tmp_path):
+    old_lua = "BobleLoot_Data = {\n    mplusCap = 50,\n}\n"
+    lua_path = tmp_path / "BobleLoot_Data.lua"
+    lua_path.write_text(old_lua, encoding="utf-8")
+
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+    rows = wa._read_table(csv_path)
+
+    report = wa._build_run_report(
+        rows, {}, mplus_cap=100,
+        fetch_warnings=[],
+        prev_lua_path=lua_path,
+    )
+
+    assert "50 -> 100" in report
+
+
+def test_build_run_report_bis_diff(tmp_path):
+    old_lua = (
+        'BobleLoot_Data = {\n'
+        '    ["Sampletank-Stormrage"] = {\n'
+        '        bis = { [212401] = true },\n'
+        '    },\n'
+        '}\n'
+    )
+    lua_path = tmp_path / "BobleLoot_Data.lua"
+    lua_path.write_text(old_lua, encoding="utf-8")
+
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+    rows = wa._read_table(csv_path)
+    bis = {"Sampletank-Stormrage": [212401, 212403]}  # 212403 added
+
+    report = wa._build_run_report(
+        rows, bis, mplus_cap=100,
+        fetch_warnings=[],
+        prev_lua_path=lua_path,
+    )
+
+    assert "BiS diff" in report
+    assert "+1 item(s)" in report
+
+
+def test_build_run_report_zero_sim_chars():
+    rows = [
+        {"character": "Boble-Stormrage", "mplus_dungeons": 10, "attendance": 80.0},
+        {"character": "Kotoma-TwistingNether", "mplus_dungeons": 5, "attendance": 60.0,
+         "sim_212401": 3.2},
+    ]
+    report = wa._build_run_report(
+        rows, {}, mplus_cap=100,
+        fetch_warnings=[],
+        prev_lua_path=None,
+    )
+    assert "Boble-Stormrage" in report
+    assert "Zero sim data" in report
+
+
+def test_build_run_report_warnings_listed():
+    rows = [{"character": "Boble-Stormrage", "mplus_dungeons": 10, "attendance": 80.0}]
+    report = wa._build_run_report(
+        rows, {}, mplus_cap=100,
+        fetch_warnings=["wishlists: HTTP 503 — service down"],
+        prev_lua_path=None,
+    )
+    assert "Warnings (1)" in report
+    assert "wishlists: HTTP 503" in report
+
+
+def test_parse_lua_names():
+    lua = (
+        'BobleLoot_Data = {\n'
+        '    ["Boble-Stormrage"] = {\n'
+        '    },\n'
+        '    ["Kotoma-TwistingNether"] = {\n'
+        '    },\n'
+        '}\n'
+    )
+    names = wa._parse_lua_names(lua)
+    assert names == {"Boble-Stormrage", "Kotoma-TwistingNether"}
+
+
+def test_parse_lua_mplus_cap():
+    lua = "BobleLoot_Data = {\n    mplusCap = 120,\n}\n"
+    assert wa._parse_lua_mplus_cap(lua) == 120
+
+
+def test_count_zero_sim_chars():
+    rows = [
+        {"character": "A-Realm", "sim_212401": 0.0, "sim_212403": 0.0},
+        {"character": "B-Realm", "sim_212401": 2.5},
+        {"character": "C-Realm"},
+    ]
+    result = wa._count_zero_sim_chars(rows)
+    assert "A-Realm" in result
+    assert "C-Realm" in result
+    assert "B-Realm" not in result

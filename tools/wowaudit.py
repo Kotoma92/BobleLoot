@@ -543,6 +543,163 @@ def fetch_team_url(api_key: str) -> str | None:
 
 
 # --------------------------------------------------------------------------
+# Run report
+# --------------------------------------------------------------------------
+
+def _parse_lua_names(lua_text: str) -> set[str]:
+    """Extract character names from a BobleLoot_Data.lua file.
+
+    Uses simple string scanning — not a full Lua parser. Matches lines of
+    the form:  ["Name-Realm"] = {
+    """
+    import re
+    return set(re.findall(r'\["([^"]+)"\]\s*=\s*\{', lua_text))
+
+
+def _parse_lua_mplus_cap(lua_text: str) -> int | None:
+    """Extract the mplusCap value from a BobleLoot_Data.lua file."""
+    import re
+    m = re.search(r'mplusCap\s*=\s*(\d+)', lua_text)
+    return int(m.group(1)) if m else None
+
+
+def _parse_lua_bis(lua_text: str) -> dict[str, set[int]]:
+    """Extract BiS item IDs per character from a BobleLoot_Data.lua file.
+
+    Returns {"Name-Realm": {itemID, ...}}.
+
+    Uses a two-step approach to handle nested braces correctly: first find
+    all character name positions, then find all bis = {...} blocks, and
+    associate each bis block with the nearest preceding character name.
+    """
+    import re
+    result: dict[str, set[int]] = {}
+    char_positions = [
+        (m.start(), m.group(1))
+        for m in re.finditer(r'\["([^"]+)"\]\s*=\s*\{', lua_text)
+    ]
+    bis_blocks = [
+        (m.start(), m.group(1))
+        for m in re.finditer(r'bis\s*=\s*\{([^}]*)\}', lua_text)
+    ]
+    for bis_pos, bis_content in bis_blocks:
+        preceding = [(pos, name) for pos, name in char_positions if pos < bis_pos]
+        if preceding:
+            _, name = max(preceding, key=lambda x: x[0])
+            ids = set(int(x) for x in re.findall(r'\[(\d+)\]\s*=\s*true', bis_content))
+            result[name] = ids
+    return result
+
+
+def _count_zero_sim_chars(rows: list[dict]) -> list[str]:
+    """Return names of characters whose every sim column is 0 or absent."""
+    zero_names: list[str] = []
+    for row in rows:
+        sim_vals = [
+            v for k, v in row.items()
+            if k.startswith("sim_") and k[4:].isdigit()
+        ]
+        if not sim_vals or all(_to_float(v) == 0.0 for v in sim_vals):
+            zero_names.append(row.get("character", "?"))
+    return zero_names
+
+
+def _build_run_report(
+    rows: list[dict],
+    bis: dict[str, list[int]],
+    mplus_cap: int,
+    fetch_warnings: list[str],
+    prev_lua_path: Path | None,
+) -> str:
+    """Build a human-readable run report string.
+
+    Args:
+        rows: The assembled character rows for this run.
+        bis: BiS mapping used for this run.
+        mplus_cap: The computed M+ cap for this run.
+        fetch_warnings: Warnings accumulated during fetch.
+        prev_lua_path: Path to the existing Lua file (for diffing); None if new.
+
+    Returns:
+        A multi-line string suitable for printing to stdout.
+    """
+    lines: list[str] = []
+    lines.append("=" * 60)
+    lines.append("BobleLoot run report")
+    lines.append("=" * 60)
+
+    # Characters.
+    new_names = {(row.get("character") or "").strip() for row in rows if row.get("character")}
+    lines.append(f"Characters this run : {len(new_names)}")
+
+    # Diff against previous file.
+    prev_names: set[str] = set()
+    prev_mplus_cap: int | None = None
+    prev_bis: dict[str, set[int]] = {}
+    if prev_lua_path is not None and prev_lua_path.is_file():
+        try:
+            prev_text = prev_lua_path.read_text(encoding="utf-8")
+            prev_names = _parse_lua_names(prev_text)
+            prev_mplus_cap = _parse_lua_mplus_cap(prev_text)
+            prev_bis = _parse_lua_bis(prev_text)
+        except OSError:
+            pass
+
+    added   = sorted(new_names - prev_names)
+    removed = sorted(prev_names - new_names)
+    if added:
+        lines.append(f"  Added   : {', '.join(added)}")
+    if removed:
+        lines.append(f"  Removed : {', '.join(removed)}")
+    if not added and not removed and prev_names:
+        lines.append("  Roster  : no change")
+
+    # Zero-sim characters.
+    zero_sims = _count_zero_sim_chars(rows)
+    if zero_sims:
+        lines.append(f"Zero sim data ({len(zero_sims)}) : {', '.join(zero_sims)}")
+    else:
+        lines.append("Zero sim data : none")
+
+    # M+ cap.
+    if prev_mplus_cap is not None and prev_mplus_cap != mplus_cap:
+        lines.append(f"M+ cap : {prev_mplus_cap} -> {mplus_cap}")
+    else:
+        lines.append(f"M+ cap : {mplus_cap}")
+
+    # BiS diff (summarised as total items changed).
+    new_bis_sets = {name: set(ids) for name, ids in bis.items()}
+    bis_changes: list[str] = []
+    for name in sorted(new_bis_sets.keys() | prev_bis.keys()):
+        old_set = prev_bis.get(name, set())
+        new_set = new_bis_sets.get(name, set())
+        if old_set != new_set:
+            added_ids   = sorted(new_set - old_set)
+            removed_ids = sorted(old_set - new_set)
+            parts: list[str] = []
+            if added_ids:
+                parts.append(f"+{len(added_ids)} item(s)")
+            if removed_ids:
+                parts.append(f"-{len(removed_ids)} item(s)")
+            bis_changes.append(f"  {name}: {', '.join(parts)}")
+    if bis_changes:
+        lines.append(f"BiS diff ({len(bis_changes)} character(s) changed):")
+        lines.extend(bis_changes)
+    else:
+        lines.append("BiS diff : no change")
+
+    # Fetch warnings.
+    if fetch_warnings:
+        lines.append(f"Warnings ({len(fetch_warnings)}):")
+        for w in fetch_warnings:
+            lines.append(f"  ! {w}")
+    else:
+        lines.append("Warnings : none")
+
+    lines.append("=" * 60)
+    return "\n".join(lines)
+
+# --------------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser(
@@ -621,6 +778,11 @@ def main():
         )
     except ValueError as exc:
         sys.exit(str(exc))
+    report = _build_run_report(
+        rows, bis, mplus_cap, fetch_warnings if not args.wowaudit else [],
+        args.out if args.out.is_file() else None,
+    )
+    print(report)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(lua, encoding="utf-8")
     print(f"Wrote {args.out}: {len(rows)} characters, "
