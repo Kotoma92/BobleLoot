@@ -376,8 +376,47 @@ function SP:Setup(addonArg)
     addon = addonArg
     -- Do NOT build frames here. Lazy build on first Open/Toggle.
 
-    -- Register Blizzard Settings API proxy (Task 12 fills this in fully;
-    -- placeholder keeps Setup callable before that task lands).
+    -- ── Blizzard Settings API proxy ───────────────────────────────────
+    -- Registers a minimal entry in Esc -> Options -> AddOns so users who
+    -- navigate menus rather than clicking the minimap icon can reach the panel.
+    -- Handles three API shapes present across retail patches.
+
+    local categoryName = "Boble Loot"
+
+    -- 10.x Settings API (preferred).
+    if Settings and Settings.RegisterCanvasLayoutCategory then
+        -- Create a proxy category with a single "Open Boble Loot" button.
+        local proxyFrame = CreateFrame("Frame")
+        proxyFrame.name = categoryName
+
+        local openBtn = CreateFrame("Button", nil, proxyFrame,
+            "UIPanelButtonTemplate")
+        openBtn:SetText("Open Boble Loot settings")
+        openBtn:SetWidth(200)
+        openBtn:SetHeight(24)
+        openBtn:SetPoint("TOPLEFT", proxyFrame, "TOPLEFT", 16, -16)
+        openBtn:SetScript("OnClick", function()
+            SP:Open()
+            -- Close the Blizzard Options frame so it doesn't sit on top.
+            if SettingsPanel and SettingsPanel:IsShown() then
+                HideUIPanel(SettingsPanel)
+            end
+        end)
+
+        local category = Settings.RegisterCanvasLayoutCategory(
+            proxyFrame, categoryName)
+        Settings.RegisterAddOnCategory(category)
+        self._blizzCategory = category
+
+    elseif InterfaceOptions_AddCategory then
+        -- Legacy pre-10.x path.
+        local proxyFrame = CreateFrame("Frame")
+        proxyFrame.name  = categoryName
+        InterfaceOptions_AddCategory(proxyFrame)
+        self._blizzProxyFrame = proxyFrame
+    end
+    -- If neither API is available the proxy simply doesn't register.
+    -- The minimap button and /bl config slash command still work.
 end
 
 function SP:Toggle()
