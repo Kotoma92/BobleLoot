@@ -110,15 +110,45 @@ local function computeScoreForRow(rcVoting, addon, session, name, simReference, 
     })
 end
 
-local function formatScore(score)
-    if not score then return "|cff666666-|r" end
-    -- Color ramp: red (<40) -> yellow (<70) -> green (>=70)
-    local color
-    if score >= 70 then     color = "|cff40ff40"
-    elseif score >= 40 then color = "|cffffd040"
-    else                    color = "|cffff5050"
+-- Returns true when `name` has an entry in the current dataset.
+local function isInDataset(addon, name)
+    local data = addon:GetData()
+    if not data or not data.characters then return false end
+    return data.characters[name] ~= nil
+end
+
+-- score    : number | nil   (nil = Scoring:Compute returned nil)
+-- inDataset: bool           (true = character row exists in dataset)
+-- median   : number | nil   (session median across all scored candidates)
+-- max      : number | nil   (session maximum across all scored candidates)
+local function formatScore(score, inDataset, median, max)
+    if not inDataset then
+        -- Character is not in the dataset at all.
+        local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
+        return string.format("|cff%02x%02x%02x\xe2\x80\x94|r",
+            math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255))
     end
-    return string.format("%s%d|r", color, math.floor(score + 0.5))
+    if not score then
+        -- In dataset but Scoring:Compute returned nil (sim-weight=0 and
+        -- no other data, or literally all components missing).
+        return "|cff666666?|r"
+    end
+    -- score is a real number (including 0.0).
+    local c = (ns.Theme and ns.Theme.ScoreColorRelative)
+              and ns.Theme.ScoreColorRelative(score, median, max)
+              or  (ns.Theme and ns.Theme.ScoreColor and ns.Theme.ScoreColor(score))
+    if c then
+        return string.format("|cff%02x%02x%02x%d|r",
+            math.floor(c[1]*255), math.floor(c[2]*255), math.floor(c[3]*255),
+            math.floor(score + 0.5))
+    end
+    -- Fallback if Theme not yet loaded (should not happen in practice).
+    local hex
+    if score >= 70 then     hex = "40ff40"
+    elseif score >= 40 then hex = "ffd040"
+    else                    hex = "ff5050"
+    end
+    return string.format("|cff%s%d|r", hex, math.floor(score + 0.5))
 end
 
 -- Format the raw underlying stat for one component.
@@ -168,7 +198,18 @@ local function formatRaw(key, entry)
     return "-"
 end
 
-local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef)
+local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef,
+                                 sessionMedian, sessionMax)
+    local inDs = isInDataset(addon, name)
+    if not inDs then
+        tt:AddLine("|cffddddddBoble Loot|r")
+        tt:AddLine(" ")
+        tt:AddLine(string.format(
+            "|cffaaaaaa%s is not in the BobleLoot dataset.|r", name or "?"))
+        tt:AddLine("|cff888888Run tools/wowaudit.py and /reload.|r")
+        return
+    end
+    -- ... rest of tooltip (rewritten in Task 7) ...
     local s, breakdown = addon:GetScore(itemID, name, {
         simReference     = simRef,
         historyReference = histRef,
@@ -241,7 +282,8 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
     local histRef  = historyReferenceFor(addon, names)
 
     local score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
-    cellFrame.text:SetText(formatScore(score))
+    local inDs = isInDataset(addon, name)
+    cellFrame.text:SetText(formatScore(score, inDs, nil, nil))
 
     -- If we're the leader (and transparency is on so it matters),
     -- broadcast authoritative scores for every candidate so raiders see
