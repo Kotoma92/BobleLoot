@@ -14,7 +14,7 @@ local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
-BobleLoot.version = "1.0.2"
+BobleLoot.version = "1.0.3"
 
 local DB_DEFAULTS = {
     profile = {
@@ -182,10 +182,26 @@ function BobleLoot:OnSlashCommand(input)
     elseif input == "lootdb" or input == "loothistory" then
         if ns.LootHistory then
             if ns.LootHistory.Diagnose then ns.LootHistory:Diagnose(self) end
+            local before = ns.LootHistory.lastApply or 0
             ns.LootHistory:Apply(self)
-            local lh = ns.LootHistory
-            self:Print(string.format("Re-applied loot history. matched=%d scanned=%d source=%s",
-                lh.lastMatched or 0, lh.lastScanned or 0, lh.lastSource or "?"))
+            self:Print("Loot history scan started (runs in background)...")
+            -- Apply is now async (chunked across frames). Poll for the
+            -- next lastApply tick and report when done. Hard cap 30s.
+            local addonRef = self
+            local started = time()
+            local function poll()
+                local lh = ns.LootHistory
+                if (lh.lastApply or 0) > before then
+                    addonRef:Print(string.format(
+                        "Re-applied loot history. matched=%d scanned=%d source=%s",
+                        lh.lastMatched or 0, lh.lastScanned or 0, lh.lastSource or "?"))
+                elseif time() - started < 30 then
+                    C_Timer.After(0.5, poll)
+                else
+                    addonRef:Print("Loot history scan timed out (>30s).")
+                end
+            end
+            C_Timer.After(0.5, poll)
         else
             self:Print("LootHistory module not loaded.")
         end
