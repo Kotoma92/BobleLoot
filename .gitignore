@@ -6,3 +6,6 @@
 # Python tool cache.
 __pycache__/
 *.pyc
+
+# Generated guild data — never commit (contains roster info).
+Data/BobleLoot_Data.lua
