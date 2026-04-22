@@ -213,6 +213,21 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
     local score = computeScoreForRow(rcVoting, addon, session, name, simRef)
     cellFrame.text:SetText(formatScore(score))
 
+    -- If we're the leader (and transparency is on so it matters),
+    -- broadcast authoritative scores for every candidate so raiders see
+    -- exactly what we see. Throttled inside Sync:SendScores.
+    if itemID and addon:IsTransparencyEnabled() and ns.Sync
+       and UnitIsGroupLeader and UnitIsGroupLeader("player") then
+        local scores = {}
+        for _, r in ipairs(data) do
+            if r.name then
+                local s = computeScoreForRow(rcVoting, addon, session, r.name, simRef)
+                if s then scores[r.name] = s end
+            end
+        end
+        ns.Sync:SendScores(addon, itemID, scores)
+    end
+
     cellFrame:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         fillScoreTooltip(GameTooltip, addon, itemID, name, simRef)

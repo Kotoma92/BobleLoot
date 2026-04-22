@@ -17,6 +17,8 @@
        REQ      { v = "..." }                   -- newest version we know about
        DATA     { v = "...", payload = "..." }  -- payload = Deflate(Serialize(data))
        SETTINGS { transparency = true|false }   -- leader-only; broadcast to RAID
+       SCORES   { iid = N, scores = { ["Name-Realm"] = number, ... } }
+                                              -- leader-only authoritative scores
 
      Channel: "RAID" (sent only when in a raid/party).
      Prefix : "BobleLootSync"
@@ -112,6 +114,30 @@ function Sync:SendSettings(addon)
     send(addon, { kind = "SETTINGS", transparency = s.transparency and true or false }, dist)
 end
 
+-- Leader broadcasts authoritative score map for an item so candidates'
+-- transparency-mode display matches what the leader sees in council.
+-- Throttled per-item via signature comparison so rapid voting frame
+-- refreshes don't spam the channel.
+function Sync:SendScores(addon, itemID, scores)
+    if not isLeader() then return end
+    local dist = channel()
+    if not dist then return end
+    if not itemID or type(scores) ~= "table" then return end
+
+    self._lastSentScores = self._lastSentScores or {}
+    -- Build a stable signature: sorted "name=score" pairs.
+    local pairs_ = {}
+    for n, s in pairs(scores) do
+        pairs_[#pairs_ + 1] = string.format("%s=%.2f", n, s or -1)
+    end
+    table.sort(pairs_)
+    local sig = table.concat(pairs_, "|")
+    if self._lastSentScores[itemID] == sig then return end
+    self._lastSentScores[itemID] = sig
+
+    send(addon, { kind = "SCORES", iid = itemID, scores = scores }, dist)
+end
+
 function Sync:SendHello(addon)
     local data = addon:GetData()
     local v = getDataVersion(data)
@@ -182,6 +208,17 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
             if ns.LootFrame and ns.LootFrame.Refresh then
                 ns.LootFrame:Refresh()
             end
+        end
+
+    elseif msg.kind == "SCORES" then
+        -- Only honour authoritative scores from the actual group leader.
+        if not (UnitInRaid(sender) or UnitInParty(sender)) then return end
+        if not UnitIsGroupLeader(sender) then return end
+        if type(msg.iid) ~= "number" or type(msg.scores) ~= "table" then return end
+        addon._leaderScores = addon._leaderScores or {}
+        addon._leaderScores[msg.iid] = msg.scores
+        if ns.LootFrame and ns.LootFrame.Refresh then
+            ns.LootFrame:Refresh()
         end
 
     elseif msg.kind == "DATA" then

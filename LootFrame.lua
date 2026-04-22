@@ -121,13 +121,18 @@ local function attachLabel(entryFrame)
         GameTooltip:AddLine("Boble Loot — your score")
         GameTooltip:AddDoubleLine("Score", string.format("%.1f / 100", ctx.score),
             1, 1, 1, 1, 1, 1)
-        GameTooltip:AddLine(" ")
-        for k, v in pairs(ctx.breakdown or {}) do
-            GameTooltip:AddDoubleLine(
-                k,
-                string.format("%.2f x %.0f%%", v.value,
-                    (v.effectiveWeight or v.weight) * 100),
-                0.9, 0.9, 0.9, 1, 1, 1)
+        if ctx.fromLeader then
+            GameTooltip:AddLine("|cff80c0ffSent by raid leader (authoritative).|r")
+        end
+        if ctx.breakdown then
+            GameTooltip:AddLine(" ")
+            for k, v in pairs(ctx.breakdown) do
+                GameTooltip:AddDoubleLine(
+                    k,
+                    string.format("%.2f x %.0f%%", v.value,
+                        (v.effectiveWeight or v.weight) * 100),
+                    0.9, 0.9, 0.9, 1, 1, 1)
+            end
         end
         GameTooltip:Show()
     end)
@@ -155,7 +160,24 @@ local function renderEntry(addon, entry, entryFrame)
         return
     end
 
-    local score, breakdown = ns.Scoring:Compute(iid, key, addon.db.profile, data)
+    -- Prefer the leader's authoritative broadcast so transparency-mode
+    -- score matches what the leader sees in the council window.
+    local score, breakdown, fromLeader
+    local leaderMap = addon._leaderScores and addon._leaderScores[iid]
+    if leaderMap then
+        local s = leaderMap[key]
+        if s == nil then
+            -- Try player's bare name too — leader may have keyed by either.
+            s = leaderMap[UnitName("player")]
+        end
+        if s ~= nil then
+            score, fromLeader = s, true
+        end
+    end
+    if score == nil then
+        score, breakdown = ns.Scoring:Compute(iid, key, addon.db.profile, data)
+    end
+
     if not score then
         fs:SetText("")
         entryFrame[SCORE_FRAME_KEY .. "_ctx"] = nil
@@ -164,7 +186,9 @@ local function renderEntry(addon, entry, entryFrame)
 
     fs:SetText(string.format("%sYour score: %d|r", colorFor(score),
         math.floor(score + 0.5)))
-    entryFrame[SCORE_FRAME_KEY .. "_ctx"] = { score = score, breakdown = breakdown }
+    entryFrame[SCORE_FRAME_KEY .. "_ctx"] = {
+        score = score, breakdown = breakdown, fromLeader = fromLeader,
+    }
 end
 
 ----------------------------------------------------------------------------
