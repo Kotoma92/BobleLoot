@@ -194,12 +194,31 @@ function BobleLoot:OnSlashCommand(input)
         if ns.LootHistory and ns.LootHistory.DiagnoseChar then
             ns.LootHistory:DiagnoseChar(self, name)
         end
+    elseif input == "syncwarnings" or input == "syncwarn" then
+        if ns.Sync and ns.Sync.GetRecentWarnings then
+            local w = ns.Sync:GetRecentWarnings()
+            if #w == 0 then
+                self:Print("No sync warnings this session.")
+            else
+                self:Print(string.format("%d sync warning(s) this session:", #w))
+                for i, entry in ipairs(w) do
+                    self:Print(string.format("  [%d] %s from %s: %s",
+                        i,
+                        date("%H:%M:%S", entry.time),
+                        entry.sender,
+                        entry.reason))
+                end
+            end
+        end
     elseif input == "test" or input:match("^test%s+%d+$") then
         local n = tonumber(input:match("^test%s+(%d+)$")) or self.db.profile.testItemCount or 5
         if ns.TestRunner and ns.TestRunner.Run then
             ns.TestRunner:Run(self, n, self.db.profile.testUseDatasetItems)
         end
     else
-        self:Print("Commands: /bl config | /bl version | /bl broadcast | /bl transparency on|off | /bl checkdata | /bl lootdb | /bl debugchar <Name-Realm> | /bl test [N] | /bl score <itemID> <Name-Realm>")
+        self:Print("Commands: /bl config | /bl version | /bl broadcast | " ..
+            "/bl transparency on|off | /bl checkdata | /bl lootdb | " ..
+            "/bl debugchar <Name-Realm> | /bl test [N] | " ..
+            "/bl score <itemID> <Name-Realm> | /bl syncwarnings")
     end
 end
