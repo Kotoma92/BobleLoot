@@ -117,6 +117,48 @@ local function isInDataset(addon, name)
     return data.characters[name] ~= nil
 end
 
+-- Per-render-pass cache for session median and max. Recomputed whenever
+-- doCellUpdate is called for row 1 (the first row triggers the full pass).
+-- Keyed by session number so stale data from a previous item is evicted.
+local _sessionStats = {}   -- { session = N, median = X, max = Y }
+
+local function computeSessionStats(rcVoting, addon, session, tableData)
+    -- Return cached value if same session.
+    if _sessionStats.session == session
+       and _sessionStats.median ~= nil then
+        return _sessionStats.median, _sessionStats.max
+    end
+
+    local itemID  = getItemIDForSession(rcVoting, session)
+    local names   = bidderNames(rcVoting, session, tableData)
+    local simRef  = simReferenceFor(addon, itemID, names)
+    local histRef = historyReferenceFor(addon, names)
+
+    local scores = {}
+    local data = addon:GetData()
+    if data and data.characters and names then
+        for _, n in ipairs(names) do
+            local s = computeScoreForRow(rcVoting, addon, session, n, simRef, histRef)
+            if s then scores[#scores + 1] = s end
+        end
+    end
+
+    local median, max
+    if #scores > 0 then
+        table.sort(scores)
+        max = scores[#scores]
+        local mid = math.floor(#scores / 2)
+        if #scores % 2 == 1 then
+            median = scores[mid + 1]
+        else
+            median = (scores[mid] + scores[mid + 1]) / 2
+        end
+    end
+
+    _sessionStats = { session = session, median = median, max = max }
+    return median, max
+end
+
 -- score    : number | nil   (nil = Scoring:Compute returned nil)
 -- inDataset: bool           (true = character row exists in dataset)
 -- median   : number | nil   (session median across all scored candidates)
@@ -276,14 +318,21 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
     local name     = rowData.name
     local session  = rcVoting.GetCurrentSession and rcVoting:GetCurrentSession()
                      or (rcVoting.session)  -- legacy fallback
+
+    -- Evict stats cache when the session number changes.
+    if _sessionStats.session ~= session then
+        _sessionStats = {}
+    end
+
     local itemID   = getItemIDForSession(rcVoting, session)
     local names    = bidderNames(rcVoting, session, data)
     local simRef   = simReferenceFor(addon, itemID, names)
     local histRef  = historyReferenceFor(addon, names)
 
-    local score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
-    local inDs = isInDataset(addon, name)
-    cellFrame.text:SetText(formatScore(score, inDs, nil, nil))
+    local score              = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
+    local inDs               = isInDataset(addon, name)
+    local median, max        = computeSessionStats(rcVoting, addon, session, data)
+    cellFrame.text:SetText(formatScore(score, inDs, median, max))
 
     -- If we're the leader (and transparency is on so it matters),
     -- broadcast authoritative scores for every candidate so raiders see
@@ -302,7 +351,8 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
 
     cellFrame:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        fillScoreTooltip(GameTooltip, addon, itemID, name, simRef, histRef)
+        local med, mx = computeSessionStats(rcVoting, addon, session, data)
+        fillScoreTooltip(GameTooltip, addon, itemID, name, simRef, histRef, med, mx)
         GameTooltip:Show()
     end)
     cellFrame:SetScript("OnLeave", function() GameTooltip:Hide() end)
