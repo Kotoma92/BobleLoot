@@ -162,3 +162,36 @@ def test_best_wishlist_score_none_percentage_skipped():
     """None percentage in wishes list is skipped."""
     item = {"wishes": [{"percentage": None}, {"percentage": 1.8}]}
     assert wa._best_wishlist_score(item) == 1.8
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — _full_name realm-space stripping
+# ---------------------------------------------------------------------------
+
+def test_full_name_simple():
+    assert wa._full_name("Boble", "Stormrage") == "Boble-Stormrage"
+
+
+def test_full_name_realm_with_spaces():
+    """Spaces in realm name are stripped — 'Twisting Nether' -> 'TwistingNether'."""
+    assert wa._full_name("Boble", "Twisting Nether") == "Boble-TwistingNether"
+
+
+def test_full_name_realm_multiple_spaces():
+    assert wa._full_name("Kotoma", "The Maelstrom") == "Kotoma-TheMaelstrom"
+
+
+def test_full_name_no_realm():
+    """When realm is None or empty, just return the name."""
+    assert wa._full_name("Boble", None) == "Boble"
+    assert wa._full_name("Boble", "") == "Boble"
+
+
+def test_full_name_empty_name_returns_none():
+    assert wa._full_name("", "Stormrage") is None
+    assert wa._full_name(None, "Stormrage") is None
+
+
+def test_full_name_realm_leading_trailing_spaces():
+    """Leading/trailing spaces in realm are also collapsed."""
+    assert wa._full_name("Boble", "  Stormrage  ") == "Boble-Stormrage"
