@@ -82,6 +82,17 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
     local attVal,  attRaw  = attendanceComponent(char)
     local mpVal,   mpRaw   = mplusComponent(char, mplusCap)
 
+    local weights = profile.weights or {}
+
+    -- If sim weighting is enabled but this candidate has no sim data
+    -- for this item, exclude them from scoring entirely. Otherwise
+    -- weight redistribution would push everyone toward 100 from the
+    -- remaining components, which is misleading when the item simply
+    -- isn't an upgrade for them.
+    if (weights.sim or 0) > 0 and simVal == nil then
+        return nil
+    end
+
     local components = {
         sim        = { value = simVal,  raw = simRaw,  reference = simReference },
         bis        = { value = bisVal,  raw = bisRaw                            },
@@ -91,7 +102,6 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
         mplus      = { value = mpVal,   raw = mpRaw,   cap = mplusCap           },
     }
 
-    local weights = profile.weights or {}
     local totalWeight, weighted = 0, 0
     local breakdown = {}
 
