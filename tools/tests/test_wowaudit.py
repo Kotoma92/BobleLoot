@@ -310,3 +310,158 @@ def test_write_cache_silent_on_bad_path(monkeypatch):
     monkeypatch.setattr(wa, "_cache_path", lambda _: Path("/nonexistent_dir_xyzzy/x.json"))
     # Should not raise.
     wa._write_cache("test", {"data": 1})
+
+
+# ---------------------------------------------------------------------------
+# Task 9 — per-endpoint partial success / warning accumulation
+# ---------------------------------------------------------------------------
+import urllib.error
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _fixture(name: str) -> object:
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _make_http_error(code: int) -> urllib.error.HTTPError:
+    import io
+    return urllib.error.HTTPError(
+        url="http://example.com",
+        code=code,
+        msg="Error",
+        hdrs={},  # type: ignore[arg-type]
+        fp=io.BytesIO(b"server error body"),
+    )
+
+
+def test_fetch_rows_characters_failure_returns_empty_rows(monkeypatch):
+    """If /characters fails and no cache, rows is empty and a warning is recorded."""
+
+    call_count = {"n": 0}
+
+    def fake_http_get_json(path, api_key):
+        call_count["n"] += 1
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            raise urllib.error.HTTPError(
+                "http://x", 503, "Service Unavailable", {}, None  # type: ignore
+            )
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http_get_json)
+    monkeypatch.setattr(wa, "_read_cache", lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, weeks, warnings = wa.fetch_rows("fake-key", None, use_cache=False)
+
+    assert rows == []
+    assert any("characters" in w for w in warnings)
+    assert any("503" in w for w in warnings)
+
+
+def test_fetch_rows_wishlists_failure_produces_empty_sims(monkeypatch):
+    """If /wishlists fails, rows still emit but with empty sims tables."""
+
+    def fake_http_get_json(path, api_key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            return _fixture("characters.json")
+        if "/attendance" in path:
+            return _fixture("attendance.json")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            raise urllib.error.URLError("timeout")
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http_get_json)
+    monkeypatch.setattr(wa, "_read_cache", lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, weeks, warnings = wa.fetch_rows("fake-key", None, use_cache=False)
+
+    assert len(rows) == 2
+    assert all(not any(k.startswith("sim_") for k in row) for row in rows)
+    assert any("wishlists" in w for w in warnings)
+
+
+def test_fetch_rows_attendance_failure_defaults_to_zero(monkeypatch):
+    """If /attendance fails, all characters get attendance=0."""
+
+    def fake_http_get_json(path, api_key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            return _fixture("characters.json")
+        if "/attendance" in path:
+            raise urllib.error.URLError("refused")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            return _fixture("wishlists.json")
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http_get_json)
+    monkeypatch.setattr(wa, "_read_cache", lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, weeks, warnings = wa.fetch_rows("fake-key", None, use_cache=False)
+
+    assert all(row["attendance"] == 0 for row in rows)
+    assert any("attendance" in w for w in warnings)
+
+
+def test_fetch_rows_uses_cache_when_flag_set(monkeypatch, tmp_path):
+    """With --use-cache, _read_cache is called instead of http_get_json."""
+
+    cache_calls: list[str] = []
+    http_calls: list[str] = []
+
+    def fake_read_cache(label):
+        cache_calls.append(label)
+        fixtures = {
+            "period":     _fixture("period.json"),
+            "characters": _fixture("characters.json"),
+            "attendance": _fixture("attendance.json"),
+            "wishlists":  _fixture("wishlists.json"),
+        }
+        # Also return empty data for historical_data labels.
+        if label.startswith("historical_"):
+            return {"characters": []}
+        return fixtures.get(label)
+
+    def fake_http_get_json(path, api_key):
+        http_calls.append(path)
+        return {}
+
+    monkeypatch.setattr(wa, "_read_cache", fake_read_cache)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+    monkeypatch.setattr(wa, "http_get_json", fake_http_get_json)
+
+    rows, weeks, warnings = wa.fetch_rows("fake-key", None, use_cache=True)
+
+    # No live HTTP calls for the four main endpoints when cache is available.
+    assert not any(
+        p in ("/period", "/characters", "/attendance", "/wishlists")
+        for p in http_calls
+    )
+    assert len(rows) == 2
+
+
+def test_fetch_rows_warnings_appear_in_build_lua_output(monkeypatch):
+    """fetch_warnings passed to build_lua appear as Lua comments."""
+
+    csv_path = SAMPLE_DIR / "wowaudit_valid.csv"
+    rows = wa._read_table(csv_path)
+    warnings = ["wishlists: HTTP 503 — service unavailable"]
+
+    lua = wa.build_lua(
+        rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+        fetch_warnings=warnings,
+    )
+
+    assert "-- WARNING: wishlists: HTTP 503" in lua
+    assert "dataWarnings" in lua

@@ -1,0 +1,28 @@
+{
+  "characters": [
+    {
+      "id": 1,
+      "instances": [
+        {
+          "difficulties": [
+            {
+              "wishlist": {
+                "encounters": [
+                  {
+                    "items": [
+                      {
+                        "id": 212401,
+                        "score_by_spec": {"Protection": {"percentage": 3.5}},
+                        "wishes": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
