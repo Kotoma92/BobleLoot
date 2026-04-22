@@ -11,3 +11,6 @@ __pycache__/
 Data/BobleLoot_Data.lua
 
 BobleLoot-*.zip
+
+# Brainstorming companion mockups (local design scratch space).
+.superpowers/
