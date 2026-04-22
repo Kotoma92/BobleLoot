@@ -115,6 +115,48 @@ def _lua_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 # --------------------------------------------------------------------------
+# Schema validation
+# --------------------------------------------------------------------------
+
+def _load_schema() -> dict | None:
+    """Load tools/schemas/wowaudit_v1.json; return None if missing or invalid."""
+    schema_path = Path(__file__).resolve().parent / "schemas" / "wowaudit_v1.json"
+    if not schema_path.is_file():
+        return None
+    try:
+        return json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _validate_endpoint(
+    data: object,
+    endpoint_key: str,
+    schema: dict | None,
+    warnings: list[str],
+) -> None:
+    """Validate `data` against `schema['$defs'][endpoint_key]`.
+
+    Appends a warning string to `warnings` on failure; never raises.
+    Returns silently if jsonschema is not installed.
+    """
+    if schema is None:
+        return
+    try:
+        import jsonschema  # type: ignore
+    except ImportError:
+        return
+    sub = schema.get("$defs", {}).get(endpoint_key)
+    if sub is None:
+        return
+    try:
+        jsonschema.validate(data, sub)
+    except jsonschema.ValidationError as exc:
+        warnings.append(
+            f"Schema validation failed for {endpoint_key!r}: {exc.message}"
+        )
+
+# --------------------------------------------------------------------------
 # Lua emitter
 # --------------------------------------------------------------------------
 

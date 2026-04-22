@@ -220,3 +220,44 @@ def test_build_lua_missing_character_column_raises():
     rows = [{"mplus_dungeons": 10, "attendance": 80.0}]
     with pytest.raises(ValueError, match="missing required columns"):
         wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — schema validation
+# ---------------------------------------------------------------------------
+
+def test_validate_endpoint_no_schema_no_crash():
+    """_validate_endpoint is silent when schema is None."""
+    warnings: list[str] = []
+    wa._validate_endpoint({"anything": True}, "characters_response", None, warnings)
+    assert warnings == []
+
+
+def test_validate_endpoint_valid_characters():
+    schema = wa._load_schema()
+    if schema is None:
+        pytest.skip("schemas/wowaudit_v1.json not found")
+    warnings: list[str] = []
+    data = [{"id": 1, "name": "Boble", "realm": "Stormrage"}]
+    wa._validate_endpoint(data, "characters_response", schema, warnings)
+    assert warnings == [], f"Unexpected warnings: {warnings}"
+
+
+def test_validate_endpoint_invalid_characters_missing_name():
+    schema = wa._load_schema()
+    if schema is None:
+        pytest.skip("schemas/wowaudit_v1.json not found")
+    try:
+        import jsonschema  # noqa: F401
+    except ImportError:
+        pytest.skip("jsonschema not installed")
+    warnings: list[str] = []
+    data = [{"id": 1}]  # missing required "name"
+    wa._validate_endpoint(data, "characters_response", schema, warnings)
+    assert len(warnings) == 1
+    assert "characters_response" in warnings[0]
+
+
+def test_load_schema_returns_dict_or_none():
+    result = wa._load_schema()
+    assert result is None or isinstance(result, dict)
