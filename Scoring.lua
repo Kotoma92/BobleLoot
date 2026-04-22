@@ -4,6 +4,28 @@
 
      A component is dropped (and its weight redistributed) when the
      underlying data is missing for that candidate.
+
+     NIL-VS-ZERO INVARIANT (Batch 1B, 2026-04-22)
+     -----------------------------------------------
+     simComponent returns nil ONLY when the item was never simmed for
+     this character (i.e. char.simsKnown[itemID] is falsy AND
+     char.sims[itemID] is nil).  A genuinely-zero sim result returns
+     0.0, not nil.
+
+     The data file encodes this via two parallel structures:
+       char.sims[itemID]      -- numeric upgrade %, may be absent if 0
+       char.simsKnown[itemID] -- true iff wowaudit.py fetched a result
+                              --   for this item (even a 0% result)
+
+     Scoring:Compute hard-returns nil for a candidate when sim weight
+     is active and simComponent returns nil. This means: "we have no
+     idea whether this item is an upgrade, so it would be misleading
+     to rank this candidate against others who have been simmed."
+     It does NOT mean "sim is zero" — that case must score, just low.
+
+     Do not collapse simsKnown into sims using a sentinel (e.g. -1).
+     The sims table is a plain number map; sentinels require every
+     consumer to know about them. Keep the tables separate.
 ]]
 
 local _, ns = ...
