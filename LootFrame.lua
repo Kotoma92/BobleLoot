@@ -79,12 +79,35 @@ end
 -- score label per entry
 ----------------------------------------------------------------------------
 
+-- Find RC's time-left bar on the entry so we can anchor the score
+-- right under it. RC's LootFrame entry has used a few different field
+-- names for this widget across versions; try them in order, then fall
+-- back to the entry's top-right corner.
+local TIMEOUT_FIELDS = {
+    "timeoutBar", "timeoutFrame", "timeoutText",
+    "timeLeftBar", "timeLeft", "tlBar", "tl",
+}
+
+local function findTimeoutWidget(entryFrame)
+    for _, name in ipairs(TIMEOUT_FIELDS) do
+        local w = entryFrame[name]
+        if w and w.GetObjectType then return w end
+    end
+    return nil
+end
+
 local function attachLabel(entryFrame)
     if entryFrame[SCORE_FRAME_KEY] then return entryFrame[SCORE_FRAME_KEY] end
     local fs = entryFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    -- Anchor at the bottom-right of the entry; that area is usually empty
-    -- on RCLootFrame entries (item info is bottom-left).
-    fs:SetPoint("BOTTOMRIGHT", entryFrame, "BOTTOMRIGHT", -8, 6)
+    -- Place directly under the "Time left" widget on the entry. If we
+    -- can't find it (different RC version), fall back to top-right of
+    -- the entry — close enough to where time-left normally lives.
+    local anchor = findTimeoutWidget(entryFrame)
+    if anchor then
+        fs:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -2)
+    else
+        fs:SetPoint("TOPRIGHT", entryFrame, "TOPRIGHT", -8, -22)
+    end
     fs:SetJustifyH("RIGHT")
     fs:SetText("")
     entryFrame[SCORE_FRAME_KEY] = fs
