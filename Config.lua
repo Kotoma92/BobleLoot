@@ -237,6 +237,22 @@ function Config:BuildOptions()
                             if ns.LootHistory then ns.LootHistory:Apply(ns.addon) end
                         end,
                     },
+                    minIlvl = {
+                        type = "range", order = 6, width = "full",
+                        name = "Minimum item level (filter by upgrade track)",
+                        desc = "Loot history entries below this item level are "
+                            .. "ignored when computing 'items received'. Use this "
+                            .. "later in the season to exclude lower upgrade tracks "
+                            .. "(Veteran/Champion) once Hero/Myth gear is the norm. "
+                            .. "Set to 0 to count all tracks. Items with unknown "
+                            .. "item level are always kept.",
+                        min = 0, max = 800, step = 1, bigStep = 5,
+                        get = function() return p().lootMinIlvl or 0 end,
+                        set = function(_, v)
+                            p().lootMinIlvl = v
+                            if ns.LootHistory then ns.LootHistory:Apply(ns.addon) end
+                        end,
+                    },
                 },
             },
             data = {

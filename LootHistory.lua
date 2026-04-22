@@ -19,6 +19,12 @@
      for the score tooltip. Until LootHistory has run for a character,
      `itemsReceived` is nil and the history component is excluded from
      the score (see Scoring.lua:historyComponent).
+
+     Filtering knobs (BobleLootDB.profile):
+        lootHistoryDays  -- only count items awarded within last N days
+        lootMinIlvl      -- ignore items below this item level (used to
+                            exclude lower upgrade tracks like Champion
+                            once Hero/Myth becomes the norm)
 ]]
 
 local _, ns = ...
@@ -27,6 +33,24 @@ ns.LootHistory = LH
 
 local DEFAULT_DAYS    = 28
 local DEFAULT_WEIGHTS = { bis = 1.5, major = 1.0, mainspec = 1.0, minor = 0.5 }
+local DEFAULT_MIN_ILVL = 0
+
+-- Try every plausible field RC has used to record an awarded item's
+-- ilvl. Falls back to parsing the link via GetDetailedItemLevelInfo.
+local function entryItemLevel(entry)
+    local v = entry.ilvl or entry.itemLevel or entry.iLvl or entry.lvl
+    if type(v) == "number" and v > 0 then return v end
+    if type(v) == "string" then
+        local n = tonumber(v:match("(%d+)"))
+        if n and n > 0 then return n end
+    end
+    local link = entry.lootWon or entry.link or entry.itemLink or entry.string
+    if type(link) == "string" and GetDetailedItemLevelInfo then
+        local ilvl = GetDetailedItemLevelInfo(link)
+        if type(ilvl) == "number" and ilvl > 0 then return ilvl end
+    end
+    return nil
+end
 
 -- Anything matching one of these patterns is fully excluded (zero credit).
 -- Matched against the lowercased `response` string.
@@ -129,11 +153,12 @@ local function effectiveWeights(profile)
 end
 
 -- Build name -> { total = weighted sum, counts = {bis=N, major=N, ...} }
-function LH:CountItemsReceived(rcLootDB, days, weights)
+function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl)
     local cutoff = nil
     if days and days > 0 then
         cutoff = time() - days * 24 * 3600
     end
+    minIlvl = minIlvl or 0
     local result = {}
     if type(rcLootDB) ~= "table" then return result end
     for name, entries in pairs(rcLootDB) do
@@ -144,7 +169,12 @@ function LH:CountItemsReceived(rcLootDB, days, weights)
                     local cat = classify(e)
                     if cat then
                         local t = entryTime(e)
-                        if (not cutoff) or (not t) or t >= cutoff then
+                        local timeOk = (not cutoff) or (not t) or t >= cutoff
+                        local ilvl = entryItemLevel(e)
+                        -- Items with unknown ilvl are kept (we'd rather
+                        -- count an old entry than silently drop it).
+                        local ilvlOk = (minIlvl <= 0) or (ilvl == nil) or (ilvl >= minIlvl)
+                        if timeOk and ilvlOk then
                             row.counts[cat] = (row.counts[cat] or 0) + 1
                             row.total = row.total + (weights[cat] or 0)
                         end
@@ -168,8 +198,9 @@ function LH:Apply(addon)
     if not db then return end
     local profile = addon.db.profile
     local days    = profile.lootHistoryDays or DEFAULT_DAYS
+    local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
     local weights = effectiveWeights(profile)
-    local rows    = self:CountItemsReceived(db, days, weights)
+    local rows    = self:CountItemsReceived(db, days, weights, minIlvl)
     for name, char in pairs(data.characters) do
         local r = rows[name]
         if r then

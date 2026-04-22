@@ -23,6 +23,7 @@ local DB_DEFAULTS = {
         testItemCount       = 5,
         testUseDatasetItems = true,
         lootHistoryDays     = 28,
+        lootMinIlvl         = 0,
         lootWeights = {
             bis      = 1.5,
             major    = 1.0,
