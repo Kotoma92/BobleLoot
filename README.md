@@ -1,6 +1,6 @@
 # Boble Loot
 
-A World of Warcraft (Retail / The War Within) addon that augments
+A World of Warcraft (Retail) addon that augments
 [RCLootCouncil](https://www.curseforge.com/wow/addons/rclootcouncil) with
 a **0–100 recommendation score** for every loot candidate, computed from:
 

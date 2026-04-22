@@ -6,7 +6,7 @@
      Approach:
        * Pick a handful of itemIDs — preferring items that appear in the
          loaded BobleLoot dataset (so scores actually populate), falling
-         back to a small built-in TWW raid loot list.
+         back to a small built-in retail raid loot list.
        * Hand the list to RCLootCouncil:Test(itemIDs). RC opens its own
          voting frame, our VotingFrame.lua hook adds the Score column
          to it just like in a real raid, and any raider in the group
@@ -26,7 +26,7 @@ ns.TestRunner = Test
 
 local DEFAULT_COUNT = 5
 
--- A small fallback set of TWW raid itemIDs in case the BobleLoot data
+-- A small fallback set of retail raid itemIDs in case the BobleLoot data
 -- file is empty / not yet loaded. These just need to be valid items
 -- so RC can resolve their links; the score will be "-" if they're not
 -- in your dataset.
