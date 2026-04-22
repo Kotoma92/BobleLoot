@@ -14,3 +14,6 @@ BobleLoot-*.zip
 
 # Brainstorming companion mockups (local design scratch space).
 .superpowers/
+
+# Claude Code local state (agent worktrees, tasks, etc).
+.claude/
