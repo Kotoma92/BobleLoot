@@ -35,6 +35,16 @@ local FALLBACK_ITEMS = {
     212406, 212407, 212408, 212409, 212410,
 }
 
+-- To exercise the confirmed-zero score case:
+--   1. In _G.BobleLoot_Data.characters, find any character entry.
+--   2. Set char.sims = {} (empty, so simComponent returns nil).
+--   3. Set char.bis = {} (not on BiS list -> partialBiSValue, e.g. 0.25).
+--   4. Set char.itemsReceived = 999 (so historyComponent returns ~0).
+--   5. Set char.attendance = 0, char.mplusDungeons = 0.
+--   6. Run a test session; that character should show "0" not "-".
+-- If weights.sim > 0 Scoring returns nil (excluded), so set weights.sim = 0
+-- in db.profile.weights when testing this path.
+
 local function shuffle(t)
     for i = #t, 2, -1 do
         local j = math.random(i)
