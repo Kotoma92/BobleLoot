@@ -214,34 +214,39 @@ local function effectiveWeights(profile)
     }
 end
 
--- Build name -> { total = weighted sum, counts = {bis=N, major=N, ...} }
-function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl)
-    local cutoff = nil
-    if days and days > 0 then
-        cutoff = time() - days * 24 * 3600
+-- Process one entry; bumps row.counts/row.total in place. Pulled out so
+-- both the sync and async paths share the exact same logic.
+local function processEntry(e, row, cutoff, weights, minIlvl)
+    if type(e) ~= "table" then return end
+    local cat = classify(e)
+    if not cat then return end
+    local t = entryTime(e)
+    local timeOk = (not cutoff) or (not t) or t >= cutoff
+    local ilvl = entryItemLevel(e)
+    local ilvlOk = (minIlvl <= 0) or (ilvl == nil) or (ilvl >= minIlvl)
+    if timeOk and ilvlOk then
+        row.counts[cat] = (row.counts[cat] or 0) + 1
+        row.total = row.total + (weights[cat] or 0)
     end
+end
+
+local function newRow()
+    return { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0 } }
+end
+
+-- Synchronous version. Kept for /bl debugchar and small DBs. Will hit
+-- "script ran too long" on >5k entries, so the live path uses the
+-- async chunked variant below.
+function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl)
+    local cutoff = (days and days > 0) and (time() - days * 24 * 3600) or nil
     minIlvl = minIlvl or 0
     local result = {}
     if type(rcLootDB) ~= "table" then return result end
     for name, entries in pairs(rcLootDB) do
         if type(entries) == "table" then
-            local row = { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0 } }
+            local row = newRow()
             for _, e in ipairs(entries) do
-                if type(e) == "table" then
-                    local cat = classify(e)
-                    if cat then
-                        local t = entryTime(e)
-                        local timeOk = (not cutoff) or (not t) or t >= cutoff
-                        local ilvl = entryItemLevel(e)
-                        -- Items with unknown ilvl are kept (we'd rather
-                        -- count an old entry than silently drop it).
-                        local ilvlOk = (minIlvl <= 0) or (ilvl == nil) or (ilvl >= minIlvl)
-                        if timeOk and ilvlOk then
-                            row.counts[cat] = (row.counts[cat] or 0) + 1
-                            row.total = row.total + (weights[cat] or 0)
-                        end
-                    end
-                end
+                processEntry(e, row, cutoff, weights, minIlvl)
             end
             result[name] = row
         end
@@ -249,10 +254,55 @@ function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl)
     return result
 end
 
+-- Spread the work across frames. Yields every CHUNK entries via
+-- C_Timer.After(0, ...) so we never trip Blizzard's "script ran too
+-- long" watchdog. Calls onDone(rows) when finished.
+local CHUNK = 400
+function LH:CountItemsReceivedAsync(rcLootDB, days, weights, minIlvl, onDone)
+    local cutoff = (days and days > 0) and (time() - days * 24 * 3600) or nil
+    minIlvl = minIlvl or 0
+    local result = {}
+    if type(rcLootDB) ~= "table" then onDone(result); return end
+    -- Snapshot character names so changes to the underlying RC table
+    -- mid-walk (a fresh CHAT_MSG_LOOT inserting an entry) don't break us.
+    local names = {}
+    for name, entries in pairs(rcLootDB) do
+        if type(entries) == "table" then names[#names + 1] = name end
+    end
+    local ni = 1
+    local function step()
+        local processed = 0
+        while ni <= #names do
+            local name = names[ni]
+            local entries = rcLootDB[name]
+            local row = result[name] or newRow()
+            result[name] = row
+            local i = (row._cursor or 0) + 1
+            local n = #entries
+            while i <= n do
+                processEntry(entries[i], row, cutoff, weights, minIlvl)
+                processed = processed + 1
+                i = i + 1
+                if processed >= CHUNK then
+                    row._cursor = i - 1
+                    return C_Timer.After(0, step)
+                end
+            end
+            row._cursor = nil
+            ni = ni + 1
+        end
+        -- Strip cursor scratch fields before handing the result off.
+        for _, r in pairs(result) do r._cursor = nil end
+        onDone(result)
+    end
+    step()
+end
+
 -- Walk our loaded data file and overwrite itemsReceived using the live
 -- counts. Names in the data file are "Name-Realm"; RC keys them the same
 -- way ("Sprinty-Doomhammer"), so they line up directly.
 function LH:Apply(addon)
+    if self._applying then return end
     local data = addon:GetData()
     if not data or not data.characters then return end
     local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
@@ -263,20 +313,24 @@ function LH:Apply(addon)
     local days    = profile.lootHistoryDays or DEFAULT_DAYS
     local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
     local weights = effectiveWeights(profile)
-    local rows    = self:CountItemsReceived(db, days, weights, minIlvl)
-    local matched, scanned = 0, 0
-    for name, _ in pairs(rows) do scanned = scanned + 1 end
-    for name, char in pairs(data.characters) do
-        local r = rows[name]
-        if r then
-            char.itemsReceived          = r.total
-            char.itemsReceivedBreakdown = r.counts
-            matched = matched + 1
+    self._applying = true
+    self:CountItemsReceivedAsync(db, days, weights, minIlvl, function(rows)
+        self._applying = false
+        if not data or not data.characters then return end
+        local matched, scanned = 0, 0
+        for _ in pairs(rows) do scanned = scanned + 1 end
+        for name, char in pairs(data.characters) do
+            local r = rows[name]
+            if r then
+                char.itemsReceived          = r.total
+                char.itemsReceivedBreakdown = r.counts
+                matched = matched + 1
+            end
         end
-    end
-    self.lastApply   = time()
-    self.lastMatched = matched
-    self.lastScanned = scanned
+        self.lastApply   = time()
+        self.lastMatched = matched
+        self.lastScanned = scanned
+    end)
 end
 
 -- Diagnostic helper used by /bl lootdb.
