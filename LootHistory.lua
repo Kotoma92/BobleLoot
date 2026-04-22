@@ -102,47 +102,77 @@ local function classify(entry)
     return "mainspec"
 end
 
-local function getRCLootDB(RC)
-    -- RC stores loot history in a few places depending on version:
-    --   * Modern: RC.lootDB
-    --   * Some builds: RC:GetHistoryDB()
-    --   * SavedVar fallback: RCLootCouncilLootDB.factionrealm[<faction-realm>]
-    --     This is the most common case — the global is populated by WoW
-    --     when the SavedVariables file loads, before any addon's OnEnable.
-    if RC then
-        if RC.lootDB then return RC.lootDB, "RC.lootDB" end
-        if type(RC.GetHistoryDB) == "function" then
-            local ok, db = pcall(RC.GetHistoryDB, RC)
-            if ok and db then return db, "RC:GetHistoryDB()" end
+-- Detect whether `db` looks like the factionrealm-shaped table
+--   { ["Horde - Draenor"] = { ["Player-Realm"] = {entries...}, ... }, ... }
+-- or already a flat name->entries map.
+local function looksLikeFactionRealm(db)
+    if type(db) ~= "table" then return false end
+    for k, v in pairs(db) do
+        if type(k) == "string" and type(v) == "table"
+           and k:find(" %- ") then  -- "<Faction> - <Realm>"
+            return true
         end
+        return false
     end
-    if _G.RCLootCouncilLootDB and _G.RCLootCouncilLootDB.factionrealm then
-        local fr = _G.RCLootCouncilLootDB.factionrealm
-        -- Merge ALL "Faction - Realm" sub-tables into one big map.
-        -- Picking just one used to drop characters on other factions/
-        -- realms entirely (e.g. an alt on the opposite faction).
-        local merged = {}
-        local sources = {}
-        for frName, perRealm in pairs(fr) do
-            if type(perRealm) == "table" then
-                sources[#sources + 1] = frName
-                for charName, entries in pairs(perRealm) do
-                    if type(entries) == "table" then
-                        if merged[charName] then
-                            -- Append (rare: same name across factionrealms)
-                            for _, e in ipairs(entries) do
-                                merged[charName][#merged[charName] + 1] = e
-                            end
-                        else
-                            merged[charName] = entries
+    return false
+end
+
+local function mergeFactionRealms(fr)
+    local merged, sources = {}, {}
+    for frName, perRealm in pairs(fr) do
+        if type(perRealm) == "table" then
+            sources[#sources + 1] = frName
+            for charName, entries in pairs(perRealm) do
+                if type(entries) == "table" then
+                    if merged[charName] then
+                        for _, e in ipairs(entries) do
+                            merged[charName][#merged[charName] + 1] = e
                         end
+                    else
+                        merged[charName] = entries
                     end
                 end
             end
         end
+    end
+    return merged, sources
+end
+
+local function getRCLootDB(RC)
+    -- Prefer the canonical SavedVariables global — it's the most
+    -- comprehensive (all characters across factionrealms recorded by
+    -- this account). RC.lootDB / RC:GetHistoryDB() are wrappers that
+    -- in some versions return only the active factionrealm.
+    if _G.RCLootCouncilLootDB and _G.RCLootCouncilLootDB.factionrealm then
+        local merged, sources = mergeFactionRealms(_G.RCLootCouncilLootDB.factionrealm)
         if next(merged) then
             return merged, "RCLootCouncilLootDB.factionrealm{"
                 .. table.concat(sources, ",") .. "}"
+        end
+    end
+    -- Fallbacks if for some reason the SavedVar is missing.
+    if RC then
+        if RC.lootDB then
+            local db = RC.lootDB
+            if looksLikeFactionRealm(db) then
+                local merged, sources = mergeFactionRealms(db)
+                if next(merged) then
+                    return merged, "RC.lootDB[merged:" .. table.concat(sources, ",") .. "]"
+                end
+            end
+            return db, "RC.lootDB"
+        end
+        if type(RC.GetHistoryDB) == "function" then
+            local ok, db = pcall(RC.GetHistoryDB, RC)
+            if ok and db then
+                if looksLikeFactionRealm(db) then
+                    local merged = mergeFactionRealms(db)
+                    if next(merged) then
+                        return merged, "RC:GetHistoryDB()[merged]"
+                    end
+                end
+                return db, "RC:GetHistoryDB()"
+            end
         end
     end
     return nil, "no source found"
