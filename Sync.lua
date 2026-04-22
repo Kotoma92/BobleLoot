@@ -208,6 +208,9 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
             if ns.LootFrame and ns.LootFrame.Refresh then
                 ns.LootFrame:Refresh()
             end
+            if ns.SettingsPanel and ns.SettingsPanel.Refresh then
+                ns.SettingsPanel:Refresh()
+            end
         end
 
     elseif msg.kind == "SCORES" then
