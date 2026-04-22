@@ -195,3 +195,28 @@ def test_full_name_empty_name_returns_none():
 def test_full_name_realm_leading_trailing_spaces():
     """Leading/trailing spaces in realm are also collapsed."""
     assert wa._full_name("Boble", "  Stormrage  ") == "Boble-Stormrage"
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — build_lua missing-column behavior
+# ---------------------------------------------------------------------------
+
+def test_build_lua_missing_required_column_raises():
+    """build_lua raises ValueError (not sys.exit) when required columns are absent."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0}]
+    # Missing: mplus_dungeons
+    with pytest.raises(ValueError, match="missing required columns"):
+        wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+
+
+def test_build_lua_empty_rows_raises():
+    """build_lua raises ValueError when rows list is empty."""
+    with pytest.raises(ValueError, match="No rows"):
+        wa.build_lua([], {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+
+
+def test_build_lua_missing_character_column_raises():
+    """build_lua raises ValueError when 'character' column is absent."""
+    rows = [{"mplus_dungeons": 10, "attendance": 80.0}]
+    with pytest.raises(ValueError, match="missing required columns"):
+        wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
