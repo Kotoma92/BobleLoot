@@ -735,10 +735,100 @@ function BuildTuningTab(parent)
 end
 
 function BuildLootDBTab(parent)
+    local T = ns.Theme
+
     local body = CreateFrame("Frame", nil, parent)
     body:SetAllPoints(parent)
     body:Hide()
     tabBodies["lootdb"] = body
+
+    local card, inner = MakeSection(body,
+        "Loot category weights (for 'items received')")
+    card:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
+    card:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 110)
+
+    -- Category sliders.
+    local CAT_ROWS = {
+        { key = "bis",      label = "BiS",                         y = -4   },
+        { key = "major",    label = "Major upgrade",               y = -50  },
+        { key = "mainspec", label = "Mainspec / Need",             y = -96  },
+        { key = "minor",    label = "Minor upgrade",               y = -142 },
+    }
+
+    for _, row in ipairs(CAT_ROWS) do
+        MakeSlider(inner, {
+            label = row.label,
+            min = 0, max = 5, step = 0.1, isPercent = false,
+            width = 280, x = 4, y = row.y,
+            get = function()
+                return (addon and addon.db.profile.lootWeights[row.key]) or 1.0
+            end,
+            set = function(v)
+                if not addon then return end
+                addon.db.profile.lootWeights[row.key] = v
+                if ns.LootHistory and ns.LootHistory.Apply then
+                    ns.LootHistory:Apply(addon)
+                end
+            end,
+        })
+    end
+
+    -- Min ilvl slider.
+    MakeSlider(inner, {
+        label = "Minimum item level (0 = all tracks)",
+        min = 0, max = 800, step = 5, isPercent = false,
+        width = 280, x = 4, y = -188,
+        get = function() return (addon and addon.db.profile.lootMinIlvl) or 0 end,
+        set = function(v)
+            if not addon then return end
+            addon.db.profile.lootMinIlvl = v
+            if ns.LootHistory and ns.LootHistory.Apply then
+                ns.LootHistory:Apply(addon)
+            end
+        end,
+    })
+
+    -- Status line.
+    local statusCard, statusInner = MakeSection(body, "Loot history status")
+    statusCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 104)
+    statusCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 6)
+
+    local statusLbl = statusInner:CreateFontString(nil, "OVERLAY")
+    statusLbl:SetFont(T.fontBody, T.sizeBody)
+    statusLbl:SetTextColor(T.white[1], T.white[2], T.white[3])
+    statusLbl:SetPoint("TOPLEFT", statusInner, "TOPLEFT", 4, -2)
+    statusLbl:SetWidth(380)
+
+    local refreshBtn = MakeButton(statusInner, "Refresh now",
+        function()
+            if ns.LootHistory and ns.LootHistory.Apply then
+                ns.LootHistory:Apply(addon)
+                -- Update the status line immediately.
+                local lh = ns.LootHistory
+                statusLbl:SetText(string.format(
+                    "Last scan: %d/%d matched  (source: %s)",
+                    lh.lastMatched or 0,
+                    lh.lastScanned or 0,
+                    lh.lastSource  or "?"))
+            end
+        end, { width = 120, height = 20, x = 390, y = -2 })
+
+    local function updateStatus()
+        local lh = ns.LootHistory
+        if lh and lh.lastMatched then
+            statusLbl:SetText(string.format(
+                "Last scan: %d/%d matched  (source: %s)",
+                lh.lastMatched or 0,
+                lh.lastScanned or 0,
+                lh.lastSource  or "?"))
+        else
+            statusLbl:SetText("|cffaaaaaaLoot history not yet applied.|r")
+        end
+    end
+
+    body:SetScript("OnShow", function()
+        updateStatus()
+    end)
 end
 
 function BuildDataTab(parent)
