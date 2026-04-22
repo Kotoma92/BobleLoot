@@ -422,10 +422,216 @@ end
 -- before each task's BuildXxxTab implementation lands.
 
 function BuildWeightsTab(parent)
+    local T = ns.Theme
+
+    -- ── Re-export normalizeWeights from Config.lua logic ──────────────
+    local WEIGHT_KEYS = { "sim", "bis", "history", "attendance", "mplus" }
+
+    local function countEnabled(enabled)
+        local n = 0
+        for _, k in ipairs(WEIGHT_KEYS) do
+            if enabled[k] then n = n + 1 end
+        end
+        return n
+    end
+
+    local function normalizeWeights(weights, enabled)
+        for _, k in ipairs(WEIGHT_KEYS) do
+            if not enabled[k] then weights[k] = 0 end
+        end
+        local sum = 0
+        for _, k in ipairs(WEIGHT_KEYS) do sum = sum + (weights[k] or 0) end
+        local n = countEnabled(enabled)
+        if sum <= 0 then
+            if n == 0 then return end
+            for _, k in ipairs(WEIGHT_KEYS) do
+                weights[k] = enabled[k] and (1 / n) or 0
+            end
+            return
+        end
+        for _, k in ipairs(WEIGHT_KEYS) do
+            weights[k] = enabled[k] and (weights[k] / sum) or 0
+        end
+    end
+
+    -- ── Body frame ────────────────────────────────────────────────────
     local body = CreateFrame("Frame", nil, parent)
     body:SetAllPoints(parent)
     body:Hide()
     tabBodies["weights"] = body
+
+    -- Section card.
+    local card, inner = MakeSection(body,
+        "Weights  (toggle on/off; sliders auto-normalize to 100%)")
+    card:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
+    card:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 80)
+
+    -- Component definitions: key, display label.
+    local COMPONENTS = {
+        { key = "sim",        label = "WoWAudit sim upgrade" },
+        { key = "bis",        label = "BiS list" },
+        { key = "history",    label = "Recent items received" },
+        { key = "attendance", label = "Raid attendance" },
+        { key = "mplus",      label = "Mythic+ dungeons (season)" },
+    }
+
+    -- References for cross-slider refresh.
+    local sliders   = {}  -- keyed by component key
+    local valLabels = {}  -- keyed by component key
+
+    local ROW_H   = 28
+    local COL_LBL = 0    -- label starts here
+    local COL_TOG = 112  -- toggle
+    local COL_SLD = 138  -- slider
+    local SLD_W   = 270
+
+    for i, comp in ipairs(COMPONENTS) do
+        local yOff = -(i - 1) * ROW_H - 4
+
+        -- Row label.
+        local lbl = inner:CreateFontString(nil, "OVERLAY")
+        lbl:SetFont(T.fontBody, T.sizeBody)
+        lbl:SetTextColor(T.white[1], T.white[2], T.white[3])
+        lbl:SetPoint("TOPLEFT", inner, "TOPLEFT", COL_LBL, yOff)
+        lbl:SetWidth(110)
+        lbl:SetText(comp.label)
+
+        -- Enable toggle.
+        local tog = MakeToggle(inner, {
+            label = "",
+            x = COL_TOG, y = yOff,
+            get = function()
+                return addon and addon.db.profile.weightsEnabled[comp.key]
+            end,
+            set = function(v)
+                if not addon then return end
+                local p = addon.db.profile
+                p.weightsEnabled[comp.key] = v
+                if v then
+                    -- Give the newly-enabled key an equal share before renorm.
+                    local n = countEnabled(p.weightsEnabled)
+                    p.weights[comp.key] = (n > 0) and (1 / n) or 1
+                end
+                normalizeWeights(p.weights, p.weightsEnabled)
+                -- Refresh all sliders so renorm is visible.
+                for _, k in ipairs(WEIGHT_KEYS) do
+                    if sliders[k] then
+                        local enabled = p.weightsEnabled[k]
+                        sliders[k]:SetEnabled(enabled)
+                        sliders[k]:SetValue(p.weights[k] or 0)
+                        if valLabels[k] then
+                            valLabels[k]:SetText(string.format(
+                                "%.0f%%", (p.weights[k] or 0) * 100))
+                        end
+                    end
+                end
+            end,
+        })
+
+        -- Weight slider.
+        local sld = MakeSlider(inner, {
+            label = "",
+            min = 0, max = 1, step = 0.01, isPercent = true,
+            width = SLD_W,
+            x = COL_SLD, y = yOff - 8,
+            get = function()
+                return (addon and addon.db.profile.weights[comp.key]) or 0
+            end,
+            set = function(v)
+                if not addon then return end
+                local p = addon.db.profile
+                p.weights[comp.key] = v
+                normalizeWeights(p.weights, p.weightsEnabled)
+                -- Refresh sibling sliders.
+                for _, k in ipairs(WEIGHT_KEYS) do
+                    if sliders[k] and k ~= comp.key then
+                        sliders[k]:SetValue(p.weights[k] or 0)
+                        if valLabels[k] then
+                            valLabels[k]:SetText(string.format(
+                                "%.0f%%", (p.weights[k] or 0) * 100))
+                        end
+                    end
+                end
+            end,
+        })
+
+        sliders[comp.key]   = sld
+        valLabels[comp.key] = sld._valLbl
+
+        -- Dim slider when component is disabled.
+        local isEnabled = addon and addon.db.profile.weightsEnabled[comp.key]
+        sld:SetEnabled(isEnabled ~= false)
+    end
+
+    -- ── Example score row ─────────────────────────────────────────────
+    -- A synthetic character with fixed raw inputs so the user can see how
+    -- weights shape a score as sliders move. Updates on every slider change
+    -- via the OnShow refresh path.
+
+    local exCard, exInner = MakeSection(body,
+        "Example score (how current weights shape a result)")
+    exCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6,  74)
+    exCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6,  6)
+
+    -- Fixed raw component values for the example character.
+    -- Values are 0-1 normalized inputs (same scale Scoring.lua uses).
+    local EXAMPLE_RAW = {
+        sim        = 0.72,
+        bis        = 1.00,
+        history    = 0.50,
+        attendance = 0.80,
+        mplus      = 0.60,
+    }
+
+    local exScoreLbl = exInner:CreateFontString(nil, "OVERLAY")
+    exScoreLbl:SetFont(T.fontTitle, T.sizeTitle, "OUTLINE")
+    exScoreLbl:SetPoint("TOPLEFT", exInner, "TOPLEFT", 4, -2)
+
+    local exDetailLbl = exInner:CreateFontString(nil, "OVERLAY")
+    exDetailLbl:SetFont(T.fontBody, T.sizeSmall)
+    exDetailLbl:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    exDetailLbl:SetPoint("TOPLEFT", exScoreLbl, "BOTTOMLEFT", 0, -2)
+    exDetailLbl:SetWidth(500)
+
+    local function refreshExampleRow()
+        if not addon then return end
+        local p = addon.db.profile
+        local score = 0
+        local parts = {}
+        for _, k in ipairs(WEIGHT_KEYS) do
+            local w = p.weights[k] or 0
+            local r = EXAMPLE_RAW[k] or 0
+            local contrib = w * r * 100
+            score = score + contrib
+            if w > 0 then
+                parts[#parts + 1] = string.format("%s=%.1f", k, contrib)
+            end
+        end
+        local col = ns.Theme.ScoreColor(score)
+        exScoreLbl:SetTextColor(col[1], col[2], col[3])
+        exScoreLbl:SetText(string.format("%.0f", score))
+        exDetailLbl:SetText(
+            "(synthetic inputs: sim=72%%, bis=100%%, hist=50%%, att=80%%, m+=60%%)  "
+            .. table.concat(parts, "  "))
+    end
+
+    -- Refresh on tab show.
+    body:SetScript("OnShow", function()
+        if not addon then return end
+        local p = addon.db.profile
+        for _, k in ipairs(WEIGHT_KEYS) do
+            if sliders[k] then
+                local enabled = p.weightsEnabled[k]
+                sliders[k]:SetEnabled(enabled ~= false)
+                sliders[k]:SetValue(p.weights[k] or 0)
+                if valLabels[k] then
+                    valLabels[k]:SetText(string.format(
+                        "%.0f%%", (p.weights[k] or 0) * 100))
+                end
+            end
+        end
+        refreshExampleRow()
+    end)
 end
 
 function BuildTuningTab(parent)
