@@ -179,12 +179,22 @@ function BobleLoot:OnSlashCommand(input)
         if ns.RaidReminder and ns.RaidReminder.ForceCheck then
             ns.RaidReminder:ForceCheck(self)
         end
+    elseif input == "lootdb" or input == "loothistory" then
+        if ns.LootHistory then
+            if ns.LootHistory.Diagnose then ns.LootHistory:Diagnose(self) end
+            ns.LootHistory:Apply(self)
+            local lh = ns.LootHistory
+            self:Print(string.format("Re-applied loot history. matched=%d scanned=%d source=%s",
+                lh.lastMatched or 0, lh.lastScanned or 0, lh.lastSource or "?"))
+        else
+            self:Print("LootHistory module not loaded.")
+        end
     elseif input == "test" or input:match("^test%s+%d+$") then
         local n = tonumber(input:match("^test%s+(%d+)$")) or self.db.profile.testItemCount or 5
         if ns.TestRunner and ns.TestRunner.Run then
             ns.TestRunner:Run(self, n, self.db.profile.testUseDatasetItems)
         end
     else
-        self:Print("Commands: /bl config | /bl version | /bl broadcast | /bl transparency on|off | /bl checkdata | /bl test [N] | /bl score <itemID> <Name-Realm>")
+        self:Print("Commands: /bl config | /bl version | /bl broadcast | /bl transparency on|off | /bl checkdata | /bl lootdb | /bl test [N] | /bl score <itemID> <Name-Realm>")
     end
 end

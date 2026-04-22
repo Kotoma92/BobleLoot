@@ -106,21 +106,46 @@ local function getRCLootDB(RC)
     -- RC stores loot history in a few places depending on version:
     --   * Modern: RC.lootDB
     --   * Some builds: RC:GetHistoryDB()
-    --   * SavedVar fallback: RCLootCouncilLootDB
+    --   * SavedVar fallback: RCLootCouncilLootDB.factionrealm[<faction-realm>]
+    --     This is the most common case — the global is populated by WoW
+    --     when the SavedVariables file loads, before any addon's OnEnable.
     if RC then
-        if RC.lootDB then return RC.lootDB end
+        if RC.lootDB then return RC.lootDB, "RC.lootDB" end
         if type(RC.GetHistoryDB) == "function" then
             local ok, db = pcall(RC.GetHistoryDB, RC)
-            if ok and db then return db end
+            if ok and db then return db, "RC:GetHistoryDB()" end
         end
     end
     if _G.RCLootCouncilLootDB and _G.RCLootCouncilLootDB.factionrealm then
         local fr = _G.RCLootCouncilLootDB.factionrealm
-        for _, perRealm in pairs(fr) do
-            if type(perRealm) == "table" then return perRealm end
+        -- Merge ALL "Faction - Realm" sub-tables into one big map.
+        -- Picking just one used to drop characters on other factions/
+        -- realms entirely (e.g. an alt on the opposite faction).
+        local merged = {}
+        local sources = {}
+        for frName, perRealm in pairs(fr) do
+            if type(perRealm) == "table" then
+                sources[#sources + 1] = frName
+                for charName, entries in pairs(perRealm) do
+                    if type(entries) == "table" then
+                        if merged[charName] then
+                            -- Append (rare: same name across factionrealms)
+                            for _, e in ipairs(entries) do
+                                merged[charName][#merged[charName] + 1] = e
+                            end
+                        else
+                            merged[charName] = entries
+                        end
+                    end
+                end
+            end
+        end
+        if next(merged) then
+            return merged, "RCLootCouncilLootDB.factionrealm{"
+                .. table.concat(sources, ",") .. "}"
         end
     end
-    return nil
+    return nil, "no source found"
 end
 
 -- RC entries store time as either a Unix timestamp (number) or a "date"
@@ -194,21 +219,75 @@ function LH:Apply(addon)
     local data = addon:GetData()
     if not data or not data.characters then return end
     local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
-    local db = getRCLootDB(RC)
+    local db, source = getRCLootDB(RC)
+    self.lastSource = source
     if not db then return end
     local profile = addon.db.profile
     local days    = profile.lootHistoryDays or DEFAULT_DAYS
     local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
     local weights = effectiveWeights(profile)
     local rows    = self:CountItemsReceived(db, days, weights, minIlvl)
+    local matched, scanned = 0, 0
+    for name, _ in pairs(rows) do scanned = scanned + 1 end
     for name, char in pairs(data.characters) do
         local r = rows[name]
         if r then
             char.itemsReceived          = r.total
             char.itemsReceivedBreakdown = r.counts
+            matched = matched + 1
         end
     end
-    self.lastApply = time()
+    self.lastApply   = time()
+    self.lastMatched = matched
+    self.lastScanned = scanned
+end
+
+-- Diagnostic helper used by /bl lootdb.
+function LH:Diagnose(addon)
+    local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
+    local db, source = getRCLootDB(RC)
+    addon:Print("Loot history source: " .. (source or "?"))
+    if not db then
+        addon:Print("|cffff5555No loot history database found.|r")
+        addon:Print(" - RC loaded: " .. tostring(RC ~= nil))
+        addon:Print(" - _G.RCLootCouncilLootDB present: "
+            .. tostring(_G.RCLootCouncilLootDB ~= nil))
+        if _G.RCLootCouncilLootDB then
+            addon:Print(" - .factionrealm present: "
+                .. tostring(_G.RCLootCouncilLootDB.factionrealm ~= nil))
+        end
+        return
+    end
+    local n = 0; for _ in pairs(db) do n = n + 1 end
+    addon:Print(string.format("Found %d character(s) in RC loot history.", n))
+    local data = addon:GetData()
+    if data and data.characters then
+        local matches, missing = {}, {}
+        for name in pairs(data.characters) do
+            if db[name] then
+                local cnt = 0; for _ in ipairs(db[name]) do cnt = cnt + 1 end
+                matches[#matches + 1] = string.format("%s (%d)", name, cnt)
+            else
+                missing[#missing + 1] = name
+            end
+        end
+        if #matches > 0 then
+            addon:Print("Matched: " .. table.concat(matches, ", "))
+        end
+        if #missing > 0 then
+            addon:Print("|cffaaaaaaUnmatched dataset chars: "
+                .. table.concat(missing, ", ") .. "|r")
+        end
+        local sample = {}
+        for name in pairs(db) do
+            sample[#sample + 1] = name
+            if #sample >= 5 then break end
+        end
+        if #sample > 0 then
+            addon:Print("|cffaaaaaaSample names in RC DB: "
+                .. table.concat(sample, ", ") .. "|r")
+        end
+    end
 end
 
 function LH:Setup(addon)
