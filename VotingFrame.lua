@@ -16,6 +16,10 @@ ns.VotingFrame = VF
 
 local SCORE_COL = "blScore"
 
+-- Resolved after Scoring.lua loads; both modules are in the same TOC frame.
+local function getComponentOrder() return ns.Scoring.COMPONENT_ORDER end
+local function getComponentLabel() return ns.Scoring.COMPONENT_LABEL end
+
 -- Pull the current itemID for a session safely.
 local function getItemIDForSession(rcVoting, session)
     local lt = rcVoting.GetLootTable and rcVoting:GetLootTable()
@@ -117,16 +121,6 @@ local function formatScore(score)
     return string.format("%s%d|r", color, math.floor(score + 0.5))
 end
 
--- Ordered display metadata for the tooltip.
-local COMPONENT_ORDER = { "sim", "bis", "history", "attendance", "mplus" }
-local COMPONENT_LABEL = {
-    sim        = "Sim upgrade",
-    bis        = "BiS",
-    history    = "Loot received",
-    attendance = "Attendance",
-    mplus      = "M+ dungeons",
-}
-
 -- Format the raw underlying stat for one component.
 local function formatRaw(key, entry)
     local r = entry.raw
@@ -192,13 +186,13 @@ local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef)
     tt:AddLine("|cffaaaaaaComponent          weight  norm   = pts|r")
 
     local sumContrib = 0
-    for _, key in ipairs(COMPONENT_ORDER) do
+    for _, key in ipairs(getComponentOrder()) do
         local e = breakdown[key]
         if e then
             sumContrib = sumContrib + (e.contribution or 0)
             local left = string.format(
                 "%s |cff888888(%s)|r",
-                COMPONENT_LABEL[key] or key,
+                getComponentLabel()[key] or key,
                 formatRaw(key, e))
             local right = string.format(
                 "|cffcccccc%2.0f%%|r x |cffcccccc%.2f|r = |cffffffff%4.1f|r",
@@ -212,9 +206,9 @@ local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef)
     -- List components that were dropped (no data or weight 0) so the
     -- raid leader knows the renormalization is doing work.
     local missing = {}
-    for _, key in ipairs(COMPONENT_ORDER) do
+    for _, key in ipairs(getComponentOrder()) do
         if not breakdown[key] then
-            table.insert(missing, COMPONENT_LABEL[key] or key)
+            table.insert(missing, getComponentLabel()[key] or key)
         end
     end
     if #missing > 0 then
