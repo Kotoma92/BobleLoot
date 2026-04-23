@@ -406,6 +406,213 @@ function Sync:GetRecentWarnings()
 end
 
 ----------------------------------------------------------------------------
+-- chunked transfer receive path
+----------------------------------------------------------------------------
+
+--- Cancel and clean up all state for a given sender+version transfer.
+-- Safe to call even if no transfer exists for that pair.
+function Sync:_cancelTransfer(sender, version)
+    local inFlight = self._inFlight and self._inFlight[sender]
+    if inFlight and inFlight[version] then
+        local handle = inFlight[version].timerHandle
+        if handle then
+            self._addonRef:CancelTimer(handle)
+        end
+        inFlight[version] = nil
+        if not next(inFlight) then
+            self._inFlight[sender] = nil
+        end
+    end
+
+    if _G.BobleLootSyncDB and _G.BobleLootSyncDB.pendingChunks then
+        local pc = _G.BobleLootSyncDB.pendingChunks
+        if pc[sender] then
+            pc[sender][version] = nil
+            if not next(pc[sender]) then
+                pc[sender] = nil
+            end
+        end
+    end
+end
+
+--- Called by AceTimer when a transfer's 30-second window expires.
+function Sync:_onChunkTimeout(sender, version)
+    self:_recordWarning(sender, string.format(
+        "transfer timed out after %ds (version %s)", CHUNK_TIMEOUT, tostring(version)))
+    DEFAULT_CHAT_FRAME:AddMessage(string.format(
+        "|cffff6666[BobleLoot]|r Chunked transfer from %s timed out (version %s); discarding.",
+        sender, tostring(version)))
+    self:_cancelTransfer(sender, version)
+    -- Fire AceEvent for the future 3.12 toast system.
+    self._addonRef:SendMessage("BobleLoot_SyncTimedOut", sender)
+end
+
+--- Handle one incoming DATACHUNK envelope.
+-- Called from OnComm when msg.kind == KIND_DATACHUNK.
+function Sync:_onReceiveChunk(addon, msg, sender)
+    -- Guard: require LibDeflate before doing anything with the chunk data.
+    if not LibDeflate then
+        self:_recordWarning(sender, "DATACHUNK ignored: LibDeflate not available")
+        return
+    end
+
+    -- Field validation.
+    local v     = msg.v
+    local seq   = msg.seq
+    local total = msg.total
+    local chunk = msg.chunk
+    local adler = msg.adler
+
+    if type(v) ~= "string" or type(seq) ~= "number" or type(total) ~= "number"
+        or type(chunk) ~= "string" or type(adler) ~= "number" then
+        self:_recordWarning(sender, "DATACHUNK malformed fields")
+        return
+    end
+    if seq < 1 or seq > total or total < 1 then
+        self:_recordWarning(sender, string.format(
+            "DATACHUNK invalid seq/total seq=%d total=%d", seq, total))
+        return
+    end
+
+    -- Check whether we already have a newer dataset; if so, ignore.
+    local mine = getDataVersion(addon:GetData())
+    if not newerThan(v, mine) then
+        -- Not newer; silently discard (the sender is behind us).
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Initialize BobleLootSyncDB.pendingChunks if needed.
+    _G.BobleLootSyncDB = _G.BobleLootSyncDB or {}
+    _G.BobleLootSyncDB.pendingChunks = _G.BobleLootSyncDB.pendingChunks or {}
+    local pc = _G.BobleLootSyncDB.pendingChunks
+    pc[sender] = pc[sender] or {}
+
+    -- Initialize in-flight tracker.
+    self._inFlight         = self._inFlight or {}
+    self._inFlight[sender] = self._inFlight[sender] or {}
+
+    local entry   = pc[sender][v]
+    local ifEntry = self._inFlight[sender][v]
+
+    if not entry then
+        -- First chunk of this transfer.
+        entry = {
+            total    = total,
+            received = 0,
+            chunks   = {},
+            adler    = adler,
+        }
+        pc[sender][v] = entry
+
+        ifEntry = {
+            received    = 0,
+            total       = total,
+            startedAt   = time(),
+            timerHandle = nil,
+        }
+        self._inFlight[sender][v] = ifEntry
+
+        -- Schedule the 30-second timeout.
+        ifEntry.timerHandle = addon:ScheduleTimer(function()
+            self:_onChunkTimeout(sender, v)
+        end, CHUNK_TIMEOUT)
+    else
+        -- Subsequent chunk: sanity-check total consistency.
+        if entry.total ~= total then
+            self:_recordWarning(sender, string.format(
+                "DATACHUNK total mismatch: expected %d got %d from %s",
+                entry.total, total, sender))
+            self:_cancelTransfer(sender, v)
+            return
+        end
+        -- Sanity-check adler consistency across chunks.
+        -- Each chunk envelope must carry the same Adler32 value.
+        if not adlerEquals(entry.adler, adler) then
+            self:_recordWarning(sender, string.format(
+                "DATACHUNK adler mismatch across chunks from %s", sender))
+            self:_cancelTransfer(sender, v)
+            return
+        end
+    end
+
+    -- Ignore duplicate seq (idempotent; received count only increments on new seq).
+    if entry.chunks[seq] then return end
+
+    -- Store chunk.
+    entry.chunks[seq] = chunk
+    entry.received    = entry.received + 1
+    if ifEntry then
+        ifEntry.received = entry.received
+    end
+
+    -- Fire progress event for future 3.12 toast (consumed only when that plan ships).
+    addon:SendMessage("BobleLoot_SyncProgress", sender, entry.received, total)
+
+    -- Check if complete.
+    if entry.received < total then return end
+
+    -- All chunks arrived. Cancel timeout timer.
+    if ifEntry and ifEntry.timerHandle then
+        addon:CancelTimer(ifEntry.timerHandle)
+        ifEntry.timerHandle = nil
+    end
+
+    -- Reassemble.
+    local fullPayload = reassembleChunks(entry.chunks, total)
+    if not fullPayload then
+        self:_recordWarning(sender, "DATACHUNK reassembly failed (missing seq)")
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Decode (decompress + deserialize). decodeData returns (data, serialized).
+    local data, serialized = decodeData(fullPayload)
+    if not serialized then
+        self:_recordWarning(sender, "DATACHUNK decode failure after reassembly")
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Verify Adler32 over the reassembled serialized string.
+    -- The Adler32 mismatch warning is emitted once per transfer attempt by
+    -- construction: _cancelTransfer removes the entry immediately after, so
+    -- a retry from the same sender+version pair would create a fresh entry
+    -- and be logged again. No additional per-transfer throttle is needed.
+    local actualAdler = LibDeflate:Adler32(serialized)
+    if not adlerEquals(actualAdler, entry.adler) then
+        DEFAULT_CHAT_FRAME:AddMessage(string.format(
+            "|cffff6666[BobleLoot]|r Dropped chunked data from %s: Adler32 mismatch " ..
+            "(got %d, expected %d)",
+            sender, actualAdler, entry.adler))
+        self:_recordWarning(sender, string.format(
+            "DATACHUNK Adler32 mismatch got=%d expected=%d", actualAdler, entry.adler))
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Validate structure.
+    if not data or type(data.characters) ~= "table" then
+        self:_recordWarning(sender, "DATACHUNK reassembled data has no characters table")
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Promote to live dataset.
+    _G.BobleLoot_Data = data
+    if _G.BobleLootSyncDB then
+        _G.BobleLootSyncDB.data = data
+    end
+
+    addon:Print(string.format(
+        "received dataset from %s via %d chunks (%d characters, version %s) [Adler32 OK]",
+        sender, total, countChars(data), tostring(data.generatedAt)))
+
+    -- Clean up pending state.
+    self:_cancelTransfer(sender, v)
+end
+
+----------------------------------------------------------------------------
 -- proto-version gate
 ----------------------------------------------------------------------------
 
