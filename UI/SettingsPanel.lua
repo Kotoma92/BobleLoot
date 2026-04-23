@@ -1658,6 +1658,33 @@ function BuildTestTab(parent)
                 (addon.db.profile.testUseDatasetItems ~= false))
         end, { width = 150, height = 24, x = 4, y = -120 })
 
+    -- Tooltip on the button itself when it is disabled — surfaces the reason
+    -- even when the player doesn't notice the amber label below the button.
+    runBtn:SetScript("OnEnter", function(self)
+        if self:IsEnabled() then return end   -- no tooltip needed when enabled
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("|cffddddddBoble Loot \xe2\x80\x94 Test Session|r")
+        local RCAceAddon2 = LibStub and LibStub("AceAddon-3.0", true)
+        local RC2
+        if RCAceAddon2 then
+            local ok2, r2 = pcall(function()
+                return RCAceAddon2:GetAddon("RCLootCouncil", true)
+            end)
+            RC2 = ok2 and r2 or nil
+        end
+        if not RC2 then
+            GameTooltip:AddLine(
+                "RCLootCouncil must be loaded to run a test session.",
+                1, 0.8, 0.2)
+        elseif IsInGroup() and not UnitIsGroupLeader("player") then
+            GameTooltip:AddLine(
+                "You must be the group leader (or solo) to start a test session.",
+                1, 0.8, 0.2)
+        end
+        GameTooltip:Show()
+    end)
+    runBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
     local function checkRunnable()
         -- Determine disable reason, if any.
         local RCAceAddon = LibStub and LibStub("AceAddon-3.0", true)
