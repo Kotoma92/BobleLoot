@@ -16,6 +16,11 @@ _G.BobleLoot = BobleLoot
 
 BobleLoot.version = "1.2.0-dev"
 
+-- Pending awards: { [fingerprint] = { name, itemID, ts } }
+-- Populated by LH:RegisterPendingAward (called from LH:Setup event handlers).
+-- Pruned by BobleLoot:PrunePendingAwards.
+BobleLoot._pendingAwards = BobleLoot._pendingAwards or {}
+
 local DB_DEFAULTS = {
     profile = {
         -- Migration framework (item 2.7): tracks the last migration version
@@ -121,6 +126,9 @@ function BobleLoot:OnEnable()
         self:RegisterEvent("WEEKLY_REWARDS_ITEM_GRABBED", "OnVaultItemGrabbed")
     end
 
+    -- Wasted-loot trade detection (3.5).
+    self:RegisterEvent("TRADE_CLOSED", "OnTradeClosed")
+
     -- Invalidate stale leader-score cache when leadership changes mid-raid
     -- (item 2.6).  The new leader's scores are unknown until they broadcast
     -- a fresh SCORES message; showing the old leader's scores would mislead
@@ -149,6 +157,53 @@ function BobleLoot:OnVaultItemGrabbed(event, itemLocation)
     if ns.LootHistory and ns.LootHistory.RecordVaultSelection then
         ns.LootHistory:RecordVaultSelection(self, fullName, link, ilvl)
     end
+end
+
+function BobleLoot:PrunePendingAwards()
+    local now = time()
+    for fp, entry in pairs(self._pendingAwards) do
+        if now - entry.ts > 300 then
+            self._pendingAwards[fp] = nil
+        end
+    end
+end
+
+function BobleLoot:OnTradeClosed()
+    -- TRADE_CLOSED fires for both successful trades and cancellations.
+    -- GetTradePlayerItemInfo returns nil link on cancellation, so nil-
+    -- guards below handle that transparently.
+    self:PrunePendingAwards()
+    local profile = self.db and self.db.profile
+    if not profile then return end
+
+    -- Inspect items the local player gave away (up to 7 trade slots).
+    for slot = 1, 7 do
+        local _, _, _, _, link = GetTradePlayerItemInfo(slot)
+        if link then
+            local itemID = C_Item and C_Item.GetItemInfoInstant and
+                select(2, C_Item.GetItemInfoInstant(link))
+            if itemID then
+                -- The local player is trading this item out.
+                -- Check if the local player has a pending award for it
+                -- (meaning they were the RC recipient and are now giving it away).
+                local playerName = UnitName("player")
+                if playerName then
+                    local fp = ns.LootHistory and
+                        ns.LootHistory:MakeFingerprint(playerName, itemID)
+                    if fp and self._pendingAwards[fp] then
+                        ns.LootHistory:MarkWasted(playerName, itemID, profile)
+                        self._pendingAwards[fp] = nil
+                        self:Print(string.format(
+                            "BobleLoot: marked item %d as wasted for %s (traded away).",
+                            itemID, playerName))
+                    end
+                end
+            end
+        end
+    end
+
+    -- Inspect items the trade target gave the local player — not relevant
+    -- for wasted-loot detection (we care about outbound awards). Skipped.
 end
 
 -- Synced settings (broadcast by raid leader; persisted in BobleLootSyncDB).
