@@ -244,6 +244,7 @@ def build_lua(
     loot_min_ilvl: int = 0,
     history_days: int | None = None,
     tier_name: str | None = None,
+    missing_wishlists: list[str] | None = None,
 ) -> str:
     """Render BobleLoot_Data.lua from assembled rows.
 
@@ -260,6 +261,9 @@ def build_lua(
             or --loot-min-ilvl). Emitted when non-zero.
         history_days: Optional history window override (from --tier preset).
         tier_name: Optional tier preset name (e.g. "TWW-S3").
+        missing_wishlists: Optional list of "Name-Realm" strings for characters
+            present in the roster but absent from the /wishlists payload.
+            Emitted as a ``missingWishlists`` array for the Lua side to surface.
 
     Returns:
         The Lua file contents as a string.
@@ -316,6 +320,11 @@ def build_lua(
     if fetch_warnings:
         escaped = ", ".join(f'"{_lua_escape(w)}"' for w in fetch_warnings)
         out.append(f"    dataWarnings = {{ {escaped} }},")
+
+    # missingWishlists array — characters in the roster with no wishlist data.
+    if missing_wishlists:
+        escaped_names = ", ".join(f'"{_lua_escape(n)}"' for n in missing_wishlists)
+        out.append(f"    missingWishlists = {{ {escaped_names} }},")
 
     out.append("    characters  = {")
 
@@ -485,15 +494,19 @@ def fetch_rows(
     dump_dir: Path | None,
     use_cache: bool = False,
     spec_aware: bool = True,
-) -> tuple[list[dict], int, list[str]]:
+) -> tuple[list[dict], int, list[str], list[str]]:
     """Hit all wowaudit endpoints and merge into per-character row dicts.
 
     Returns:
-        (rows, weeks_in_season, fetch_warnings)
+        (rows, weeks_in_season, fetch_warnings, missing_wishlists)
 
     fetch_warnings is a list of human-readable warning strings for endpoints
     that failed or produced schema violations. The caller embeds these in the
     generated Lua file.
+
+    missing_wishlists is a list of "Name-Realm" strings for roster characters
+    that were absent from the /wishlists payload. These are characters whose
+    sim data could not be populated and whose sims tables will be empty.
     """
     schema = _load_schema()
     fetch_warnings: list[str] = []
@@ -646,6 +659,28 @@ def fetch_rows(
                         if iid not in sims_by_id[cid] or score > sims_by_id[cid][iid]:
                             sims_by_id[cid][iid] = score
 
+    # --- cross-reference roster vs wishlists to detect missing characters ---
+    # wl_char_ids is the set of character IDs present in the wishlists payload.
+    # Any roster character whose ID is absent gets a warning and is added to
+    # missing_wishlists so the Lua output can surface the gap to the raid leader.
+    wl_char_ids: set[int] = set(sims_by_id.keys())
+    missing_wishlists: list[str] = []
+    if wl_payload is not None:
+        # Only cross-reference when the endpoint succeeded; if wishlists failed
+        # entirely the warning is already accumulated from _fetch().
+        for c in roster:
+            if not isinstance(c, dict):
+                continue
+            cid  = c.get("id")
+            full = _full_name(c.get("name"), c.get("realm"))
+            if not isinstance(cid, int) or not full:
+                continue
+            if cid not in wl_char_ids:
+                missing_wishlists.append(full)
+                fetch_warnings.append(
+                    f"{full}: missing from /wishlists payload — sim data will be empty."
+                )
+
     # --- assemble rows ---
     rows: list[dict] = []
     for c in roster:
@@ -667,7 +702,7 @@ def fetch_rows(
             row[f"sim_{iid}"] = score
         rows.append(row)
 
-    return rows, weeks_in_season, fetch_warnings
+    return rows, weeks_in_season, fetch_warnings, missing_wishlists
 
 
 def fetch_team_url(api_key: str) -> str | None:
@@ -924,6 +959,7 @@ def main():
     weeks_in_season = 1
     team_url = None
     fetch_warnings: list[str] = []
+    missing_wishlists: list[str] = []
     spec_aware = not args.no_spec_aware
     if args.wowaudit is not None:
         # Convert mode.
@@ -941,7 +977,7 @@ def main():
                 "or put it in a .env file. Alternatively pass --wowaudit "
                 "to convert a manual export."
             )
-        rows, weeks_in_season, fetch_warnings = fetch_rows(
+        rows, weeks_in_season, fetch_warnings, missing_wishlists = fetch_rows(
             args.api_key, args.dump_raw, use_cache=args.use_cache,
             spec_aware=spec_aware,
         )
@@ -979,6 +1015,7 @@ def main():
             loot_min_ilvl=loot_min_ilvl,
             history_days=history_days_override,
             tier_name=args.tier,
+            missing_wishlists=missing_wishlists if not args.wowaudit else None,
         )
     except ValueError as exc:
         sys.exit(str(exc))

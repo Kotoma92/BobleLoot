@@ -392,7 +392,7 @@ def test_fetch_rows_characters_failure_returns_empty_rows(monkeypatch):
     monkeypatch.setattr(wa, "_read_cache", lambda _: None)
     monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
 
-    rows, weeks, warnings = wa.fetch_rows("fake-key", None, use_cache=False)
+    rows, weeks, warnings, _missing = wa.fetch_rows("fake-key", None, use_cache=False)
 
     assert rows == []
     assert any("characters" in w for w in warnings)
@@ -419,7 +419,7 @@ def test_fetch_rows_wishlists_failure_produces_empty_sims(monkeypatch):
     monkeypatch.setattr(wa, "_read_cache", lambda _: None)
     monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
 
-    rows, weeks, warnings = wa.fetch_rows("fake-key", None, use_cache=False)
+    rows, weeks, warnings, _missing = wa.fetch_rows("fake-key", None, use_cache=False)
 
     assert len(rows) == 2
     assert all(not any(k.startswith("sim_") for k in row) for row in rows)
@@ -446,7 +446,7 @@ def test_fetch_rows_attendance_failure_defaults_to_zero(monkeypatch):
     monkeypatch.setattr(wa, "_read_cache", lambda _: None)
     monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
 
-    rows, weeks, warnings = wa.fetch_rows("fake-key", None, use_cache=False)
+    rows, weeks, warnings, _missing = wa.fetch_rows("fake-key", None, use_cache=False)
 
     assert all(row["attendance"] == 0 for row in rows)
     assert any("attendance" in w for w in warnings)
@@ -479,7 +479,7 @@ def test_fetch_rows_uses_cache_when_flag_set(monkeypatch, tmp_path):
     monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
     monkeypatch.setattr(wa, "http_get_json", fake_http_get_json)
 
-    rows, weeks, warnings = wa.fetch_rows("fake-key", None, use_cache=True)
+    rows, weeks, warnings, _missing = wa.fetch_rows("fake-key", None, use_cache=True)
 
     # No live HTTP calls for the four main endpoints when cache is available.
     assert not any(
@@ -786,7 +786,7 @@ def test_fetch_rows_extracts_mainspec_and_role(monkeypatch):
     monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
     monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
 
-    rows, _, _ = wa.fetch_rows("key", None)
+    rows, _, _, _ = wa.fetch_rows("key", None)
     by_name = {r["character"]: r for r in rows}
 
     assert by_name["Boble-Stormrage"]["mainspec"] == "Holy"
@@ -814,7 +814,7 @@ def test_fetch_rows_missing_spec_gives_none(monkeypatch):
     monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
     monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
 
-    rows, _, _ = wa.fetch_rows("key", None)
+    rows, _, _, _ = wa.fetch_rows("key", None)
     by_name = {r["character"]: r for r in rows}
     # NoSpec character has no main_spec field
     assert by_name["NoSpec-Stormrage"]["mainspec"] is None
@@ -909,7 +909,7 @@ def test_fetch_rows_spec_aware_uses_mainspec_sim(monkeypatch):
     monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
     monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
 
-    rows, _, _ = wa.fetch_rows("key", None, spec_aware=True)
+    rows, _, _, _ = wa.fetch_rows("key", None, spec_aware=True)
     row = rows[0]
     # Holy = 2.5, Protection = 8.0; spec_aware should pick Holy (2.5)
     assert row.get("sim_212401") == 2.5
@@ -956,7 +956,7 @@ def test_fetch_rows_no_spec_aware_uses_max(monkeypatch):
     monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
     monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
 
-    rows, _, _ = wa.fetch_rows("key", None, spec_aware=False)
+    rows, _, _, _ = wa.fetch_rows("key", None, spec_aware=False)
     row = rows[0]
     # spec_aware=False: max across specs = 8.0
     assert row.get("sim_212401") == 8.0
@@ -1010,3 +1010,124 @@ def test_build_lua_omits_loot_min_ilvl_when_zero():
     rows = [{"character": "Boble-Stormrage", "attendance": 95.0, "mplus_dungeons": 30}]
     lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5, loot_min_ilvl=0)
     assert "lootMinIlvl" not in lua
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — Per-character partial-success ingestion
+# ---------------------------------------------------------------------------
+
+def test_fetch_rows_warns_on_missing_wishlist_character(monkeypatch):
+    """Characters in the roster but absent from /wishlists get a fetch_warning."""
+
+    def fake_http(path, key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            # Two characters in roster.
+            return [
+                {"id": 1, "name": "Boble",  "realm": "Stormrage"},
+                {"id": 2, "name": "Kotoma", "realm": "Twisting Nether"},
+            ]
+        if "/attendance" in path:
+            return _fixture("attendance.json")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            # Only Boble (id=1) is present in wishlists; Kotoma is missing.
+            return {
+                "characters": [
+                    {"id": 1, "instances": []},
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http)
+    monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, _, warnings, _missing = wa.fetch_rows("fake-key", None, use_cache=False)
+
+    # Kotoma should appear in warnings as missing from wishlists.
+    assert any("Kotoma-TwistingNether" in w and "wishlist" in w.lower() for w in warnings), \
+        f"Expected missing-wishlist warning for Kotoma, got: {warnings}"
+
+
+def test_build_lua_emits_missing_wishlists_array():
+    """build_lua emits a missingWishlists array when missing_wishlists is non-empty."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0, "mplus_dungeons": 30}]
+    lua = wa.build_lua(
+        rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+        missing_wishlists=["Kotoma-TwistingNether", "Other-Realm"],
+    )
+    assert "missingWishlists" in lua
+    assert '"Kotoma-TwistingNether"' in lua
+    assert '"Other-Realm"' in lua
+
+
+def test_build_lua_no_missing_wishlists_omits_key():
+    """build_lua omits missingWishlists key when the list is empty or absent."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0, "mplus_dungeons": 30}]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+    assert "missingWishlists" not in lua
+
+    lua2 = wa.build_lua(
+        rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+        missing_wishlists=[],
+    )
+    assert "missingWishlists" not in lua2
+
+
+def test_fetch_rows_all_chars_in_wishlists_no_warning(monkeypatch):
+    """No missing-wishlist warning when all roster chars appear in wishlists payload."""
+
+    def fake_http(path, key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            return [{"id": 1, "name": "Boble", "realm": "Stormrage"}]
+        if "/attendance" in path:
+            return _fixture("attendance.json")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            return {"characters": [{"id": 1, "instances": []}]}
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http)
+    monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, _, warnings, _missing = wa.fetch_rows("fake-key", None, use_cache=False)
+
+    missing_warnings = [w for w in warnings if "wishlist" in w.lower() and "missing" in w.lower()]
+    assert missing_warnings == [], f"Unexpected missing-wishlist warnings: {missing_warnings}"
+
+
+def test_fetch_rows_returns_missing_wishlists_list(monkeypatch):
+    """fetch_rows returns missing_wishlists as fourth element when character absent."""
+
+    def fake_http(path, key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            return [
+                {"id": 1, "name": "Boble",  "realm": "Stormrage"},
+                {"id": 2, "name": "Kotoma", "realm": "Twisting Nether"},
+            ]
+        if "/attendance" in path:
+            return _fixture("attendance.json")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            return {"characters": [{"id": 1, "instances": []}]}
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http)
+    monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    result = wa.fetch_rows("fake-key", None, use_cache=False)
+    # fetch_rows returns (rows, weeks, fetch_warnings, missing_wishlists)
+    assert len(result) == 4
+    rows, weeks, warnings, missing = result
+    assert "Kotoma-TwistingNether" in missing
