@@ -1,32 +1,47 @@
---[[ Sync.lua — BobleLoot raid sync protocol v2
-     Implements: roadmap items 1.4 (schemaVersion) and 1.5 (proto + Adler32).
+--[[ Sync.lua — BobleLoot raid sync protocol v3
+     Implements: roadmap items 1.4 (schemaVersion), 1.5 (proto + Adler32),
+                 and 2.8 (chunked sync / DATACHUNK message type).
 
 ── Distribution model ────────────────────────────────────────────────────────
   Whoever holds the highest `version` (generatedAt timestamp from wowaudit.py)
   is the de-facto data master for that raid session. On entering a group,
   every BobleLoot client announces its version with HELLO. Anyone who hears a
   newer version sends a REQ whisper; the master replies with DATA (compressed
-  + serialized, with Adler32 integrity field).
+  + serialized, with Adler32 integrity field) or a sequence of DATACHUNK
+  messages when both peers speak pv=3.
 
 ── Wire format (AceSerializer-encoded tables) ────────────────────────────────
   All envelopes carry:
     proto   [number]  Protocol version this message was encoded with.
                       Absent on v1 legacy messages (treated as proto=1).
-                      Currently PROTO_VERSION = 2.
+                      PROTO_VERSION = 3 as of Batch 2C.
 
   HELLO    { kind="HELLO",    proto=N, v="<generatedAt>", n=<count>, pv=N }
-             pv = highest proto the sender speaks (used for negotiation).
+             pv = highest proto the sender speaks (3 for Batch 2C clients).
+             pv=3 clients use DATACHUNK for DATA transfers; pv<=2 peers receive full-DATA fallback.
 
   REQ      { kind="REQ",      proto=N, v="<generatedAt>" }
              Whisper to the HELLO sender requesting the named version.
 
   DATA     { kind="DATA",     proto=N, v="<generatedAt>",
              payload="<base64-like>", adler=<number> }
+             Fallback path used only when negotiated proto < 3 (pv<=2 peer).
              payload = LibDeflate:EncodeForWoWAddonChannel(
                          LibDeflate:CompressDeflate(
                            AceSerializer:Serialize(data), {level=9}))
              adler   = LibDeflate:Adler32(AceSerializer:Serialize(data))
                        (computed on the PRE-compression serialized string)
+
+  DATACHUNK { kind="DATACHUNK", proto=3, v="<generatedAt>",
+              seq=N, total=N, chunk="<slice>", adler=<number> }
+             Used when both peers have pv=3.
+             chunk   = slice [seq..seq+CHUNK_SIZE-1] of the full encoded payload.
+             adler   = Adler32 of the full pre-compression serialized string;
+                       identical in all envelopes of the same transfer;
+                       verified by receiver only after all total chunks arrive.
+             Receiver accumulates in BobleLootSyncDB.pendingChunks[sender][v];
+             promotes to BobleLoot_Data when received==total and Adler32 passes.
+             30-second timeout (CHUNK_TIMEOUT) discards incomplete transfers.
 
   SETTINGS { kind="SETTINGS", proto=N, transparency=true|false }
              Leader-only; broadcast to RAID/PARTY.
@@ -35,9 +50,15 @@
              scores={["Name-Realm"]=number,...} }
              Leader-only; broadcast to RAID/PARTY.
 
-── Protocol negotiation ──────────────────────────────────────────────────────
+── Protocol negotiation (v3) ─────────────────────────────────────────────────
+  HELLO.pv advertises the sender's highest supported proto.
+  Receiver negotiates: effectivePv = math.min(PROTO_VERSION, peer.pv).
+  effectivePv >= 3  → SendDataChunked (DATACHUNK path).
+  effectivePv <= 2  → SendData legacy (DATA path, single message).
+  pv=1 peers (pre-1C clients): full-DATA, no Adler32 sent.
+  pv=2 peers (1C clients, no chunking): full-DATA with Adler32.
+  pv=3 peers (2C clients): DATACHUNK with per-transfer Adler32.
   On receiving HELLO, the receiver records sender.pv in Sync.peers[sender].
-  Subsequent messages to that peer are sent at math.min(PROTO_VERSION, peer.pv).
   A peer with no pv field (v1 client) is treated as pv=1.
   proto=1 envelopes are accepted (no adler field expected or verified).
   proto > PROTO_VERSION envelopes are rejected and logged once per sender.
@@ -47,6 +68,9 @@
   string before compression. LibDeflate:Adler32 is the public API used —
   it is LibDeflate's only public checksum function (no CRC32 is exposed).
   Receiver verifies before decompressing; mismatch → log once, drop.
+  DATACHUNK transfers carry the same Adler32 in every chunk envelope;
+  the receiver verifies it only after all chunks have been reassembled —
+  not per-chunk. A mismatch after reassembly discards the entire transfer.
 
 ── Rejection log ─────────────────────────────────────────────────────────────
   All drops are written to the _warnings ring buffer (max 20 entries).
@@ -54,7 +78,7 @@
   In-game: /bl syncwarnings
 
 ── Channel ───────────────────────────────────────────────────────────────────
-  RAID or PARTY (auto-detected). REQ and DATA are WHISPER.
+  RAID or PARTY (auto-detected). REQ, DATA, and DATACHUNK are WHISPER.
   Prefix: "BobleLootSync"
 ]]
 
@@ -66,22 +90,34 @@ local PREFIX = "BobleLootSync"
 
 -- Protocol and schema constants (see wire-format reference at bottom of plan).
 local SCHEMA_VERSION     = 1   -- BobleLootSyncDB.schemaVersion; consumed by plan 2.7
-local PROTO_VERSION      = 2   -- highest proto this client speaks
+local PROTO_VERSION      = 3   -- highest proto this client speaks
 local MIN_PROTO_VERSION  = 1   -- lowest proto this client will accept from peers
 -- Message kind strings (one authoritative list; never duplicated).
-local KIND_HELLO    = "HELLO"
-local KIND_REQ      = "REQ"
-local KIND_DATA     = "DATA"
-local KIND_SETTINGS = "SETTINGS"
-local KIND_SCORES   = "SCORES"
+local KIND_HELLO     = "HELLO"
+local KIND_REQ       = "REQ"
+local KIND_DATA      = "DATA"
+local KIND_DATACHUNK = "DATACHUNK"
+local KIND_SETTINGS  = "SETTINGS"
+local KIND_SCORES    = "SCORES"
+
+-- Chunked transfer constants.
+-- CHUNK_SIZE: bytes of WoWAddonChannel-encoded output per DATACHUNK envelope.
+-- AceComm fragments at 4078 bytes; we stay well below to leave room for the
+-- serialized envelope overhead (kind, proto, v, seq, total, adler fields).
+-- See "Size Tuning" section of the implementation plan for derivation.
+local CHUNK_SIZE    = 2048   -- bytes; tunable
+local CHUNK_TIMEOUT = 30     -- seconds; discard incomplete transfers after this
 
 -- Expose for external inspection (e.g., diagnostics, plan 3.12 toast).
 Sync.PROTO_VERSION     = PROTO_VERSION
 Sync.MIN_PROTO_VERSION = MIN_PROTO_VERSION
+Sync.KIND_DATACHUNK    = KIND_DATACHUNK
+Sync.CHUNK_SIZE        = CHUNK_SIZE
+Sync.CHUNK_TIMEOUT     = CHUNK_TIMEOUT
 
 -- Session-scoped state (reset each load; not persisted).
 Sync._loggedProtoWarn = {}   -- [sender] = true; throttle proto-rejection logs
-Sync._loggedAdlerWarn = {}   -- [sender] = true; throttle Adler32-rejection logs
+Sync._loggedAdlerWarn = {}   -- [sender] = true; throttle Adler32-rejection logs (legacy DATA path only)
 Sync._warnings        = {}   -- ring buffer; max WARNINGS_MAX entries
 local WARNINGS_MAX    = 20
 
@@ -164,6 +200,42 @@ local function decodeData(payload)
     return data, serialized
 end
 
+--- Slice an encoded payload string into ordered chunks of at most CHUNK_SIZE bytes.
+-- @param encoded  string  Full WoWAddonChannel-encoded payload (output of encodeData).
+-- @return         table   Sequence { [1]=str, [2]=str, ... }; at least one entry.
+local function encodeChunks(encoded)
+    local chunks = {}
+    local len = #encoded
+    if len == 0 then
+        chunks[1] = ""
+        return chunks
+    end
+    local pos = 1
+    while pos <= len do
+        local slice = encoded:sub(pos, pos + CHUNK_SIZE - 1)
+        chunks[#chunks + 1] = slice
+        pos = pos + CHUNK_SIZE
+    end
+    return chunks
+end
+
+--- Reassemble a chunks table (sparse [seq]=str) into the full encoded payload.
+-- Assumes all seq 1..total are present (caller verifies before calling).
+-- chunks is a [seq] = string sparse array — only numeric keys are written
+-- during accumulation (entry.chunks[seq] = chunk with numeric seq), so there
+-- is no risk of mixed-key tables here.
+-- @param chunks  table   { [1]=str, ..., [total]=str }
+-- @param total   number  Expected chunk count.
+-- @return        string  Concatenated payload, or nil if any seq is missing.
+local function reassembleChunks(chunks, total)
+    local parts = {}
+    for i = 1, total do
+        if not chunks[i] then return nil end
+        parts[i] = chunks[i]
+    end
+    return table.concat(parts)
+end
+
 ----------------------------------------------------------------------------
 -- send wrappers
 ----------------------------------------------------------------------------
@@ -203,6 +275,16 @@ function Sync:SendRequest(addon, target, version)
 end
 
 function Sync:SendData(addon, target)
+    local peerPv      = self.peers and self.peers[target] and self.peers[target].pv
+    local effectivePv = peerPv and math.min(PROTO_VERSION, peerPv) or PROTO_VERSION
+
+    if effectivePv >= 3 then
+        -- Peer supports DATACHUNK; use chunked transfer.
+        self:SendDataChunked(addon, target)
+        return
+    end
+
+    -- Fallback: single-message DATA (proto <= 2 peer).
     local data = addon:GetData()
     if not data then return end
     local payload, adler = encodeData(data)
@@ -210,15 +292,56 @@ function Sync:SendData(addon, target)
         addon:Print("could not encode data (LibDeflate missing?)")
         return
     end
-    local peerPv = self.peers and self.peers[target] and self.peers[target].pv
-    local effectivePv = peerPv and math.min(PROTO_VERSION, peerPv) or PROTO_VERSION
     send(addon, self:_wrap({
         kind    = KIND_DATA,
         v       = getDataVersion(data),
         payload = payload,
         adler   = adler,   -- Adler32 of pre-compression serialized string
     }, effectivePv), "WHISPER", target)
-    addon:Print(string.format("sent dataset (%d chars) to %s", countChars(data), target))
+    addon:Print(string.format("sent dataset (%d chars) to %s [legacy DATA]",
+        countChars(data), target))
+end
+
+--- Send the current dataset to `target` as a sequence of DATACHUNK whispers.
+-- Called when the negotiated proto is 3 (peer.pv >= 3).
+-- Falls back gracefully on encoding failure or degenerate empty payload.
+function Sync:SendDataChunked(addon, target)
+    local data = addon:GetData()
+    if not data then return end
+
+    local payload, adler = encodeData(data)
+    if not payload then
+        addon:Print("could not encode data (LibDeflate missing?)")
+        return
+    end
+
+    local chunks = encodeChunks(payload)
+    local total  = #chunks
+
+    if total == 0 then
+        -- Degenerate: encoded payload was empty; abort rather than send zero chunks.
+        addon:Print("warning: encoded payload is empty; aborting send to " .. target)
+        return
+    end
+
+    local v = getDataVersion(data)
+
+    addon:Print(string.format(
+        "sending dataset to %s in %d chunk(s) (CHUNK_SIZE=%d, adler=%d)",
+        target, total, CHUNK_SIZE, adler))
+
+    for seq, chunk in ipairs(chunks) do
+        send(addon, self:_wrap({
+            kind  = KIND_DATACHUNK,
+            v     = v,
+            seq   = seq,
+            total = total,
+            chunk = chunk,
+            adler = adler,   -- same value in every envelope; verified after reassembly
+        }, 3), "WHISPER", target)
+        -- Note: AceComm queues messages internally; we do not sleep between sends.
+        -- AceComm's BULK priority plus the addon-channel rate limiter handle pacing.
+    end
 end
 
 function Sync:SendSettings(addon)
@@ -282,6 +405,249 @@ function Sync:GetRecentWarnings()
     return self._warnings
 end
 
+--- Returns a snapshot of all currently in-flight chunked transfers.
+-- Shape: { [senderName] = { received = N, total = M, startedAt = t, version = v } }
+-- `startedAt` is a Unix timestamp (time()).
+-- Consumed by plan 3.12 toast system's progress display and /bl syncinflight.
+-- Do not mutate the returned table.
+function Sync:GetInflightTransfers()
+    local result = {}
+    if not self._inFlight then return result end
+    for sender, versions in pairs(self._inFlight) do
+        for version, entry in pairs(versions) do
+            -- Return the most recent in-flight entry per sender.
+            -- In practice there is at most one per sender at a time.
+            if not result[sender] or entry.startedAt > result[sender].startedAt then
+                result[sender] = {
+                    received  = entry.received,
+                    total     = entry.total,
+                    startedAt = entry.startedAt,
+                    version   = version,
+                }
+            end
+        end
+    end
+    return result
+end
+
+--- Discard all pending chunk data from BobleLootSyncDB.
+-- Called by plan 2B's DB migration/prune step (and by Sync:Setup directly
+-- until 2B is implemented). Any incomplete transfers from a prior session
+-- are unresumable because AceTimer handles do not survive reload.
+function Sync:PrunePendingChunks()
+    if _G.BobleLootSyncDB then
+        _G.BobleLootSyncDB.pendingChunks = {}
+    end
+    self._inFlight = {}
+end
+
+----------------------------------------------------------------------------
+-- chunked transfer receive path
+----------------------------------------------------------------------------
+
+--- Cancel and clean up all state for a given sender+version transfer.
+-- Safe to call even if no transfer exists for that pair.
+function Sync:_cancelTransfer(sender, version)
+    local inFlight = self._inFlight and self._inFlight[sender]
+    if inFlight and inFlight[version] then
+        local handle = inFlight[version].timerHandle
+        if handle then
+            self._addonRef:CancelTimer(handle)
+        end
+        inFlight[version] = nil
+        if not next(inFlight) then
+            self._inFlight[sender] = nil
+        end
+    end
+
+    if _G.BobleLootSyncDB and _G.BobleLootSyncDB.pendingChunks then
+        local pc = _G.BobleLootSyncDB.pendingChunks
+        if pc[sender] then
+            pc[sender][version] = nil
+            if not next(pc[sender]) then
+                pc[sender] = nil
+            end
+        end
+    end
+end
+
+--- Called by AceTimer when a transfer's 30-second window expires.
+function Sync:_onChunkTimeout(sender, version)
+    self:_recordWarning(sender, string.format(
+        "transfer timed out after %ds (version %s)", CHUNK_TIMEOUT, tostring(version)))
+    DEFAULT_CHAT_FRAME:AddMessage(string.format(
+        "|cffff6666[BobleLoot]|r Chunked transfer from %s timed out (version %s); discarding.",
+        sender, tostring(version)))
+    self:_cancelTransfer(sender, version)
+    -- Fire AceEvent for the future 3.12 toast system.
+    self._addonRef:SendMessage("BobleLoot_SyncTimedOut", sender)
+end
+
+--- Handle one incoming DATACHUNK envelope.
+-- Called from OnComm when msg.kind == KIND_DATACHUNK.
+function Sync:_onReceiveChunk(addon, msg, sender)
+    -- Guard: require LibDeflate before doing anything with the chunk data.
+    if not LibDeflate then
+        self:_recordWarning(sender, "DATACHUNK ignored: LibDeflate not available")
+        return
+    end
+
+    -- Field validation.
+    local v     = msg.v
+    local seq   = msg.seq
+    local total = msg.total
+    local chunk = msg.chunk
+    local adler = msg.adler
+
+    if type(v) ~= "string" or type(seq) ~= "number" or type(total) ~= "number"
+        or type(chunk) ~= "string" or type(adler) ~= "number" then
+        self:_recordWarning(sender, "DATACHUNK malformed fields")
+        return
+    end
+    if seq < 1 or seq > total or total < 1 then
+        self:_recordWarning(sender, string.format(
+            "DATACHUNK invalid seq/total seq=%d total=%d", seq, total))
+        return
+    end
+
+    -- Check whether we already have a newer dataset; if so, ignore.
+    local mine = getDataVersion(addon:GetData())
+    if not newerThan(v, mine) then
+        -- Not newer; silently discard (the sender is behind us).
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Initialize BobleLootSyncDB.pendingChunks if needed.
+    _G.BobleLootSyncDB = _G.BobleLootSyncDB or {}
+    _G.BobleLootSyncDB.pendingChunks = _G.BobleLootSyncDB.pendingChunks or {}
+    local pc = _G.BobleLootSyncDB.pendingChunks
+    pc[sender] = pc[sender] or {}
+
+    -- Initialize in-flight tracker.
+    self._inFlight         = self._inFlight or {}
+    self._inFlight[sender] = self._inFlight[sender] or {}
+
+    local entry   = pc[sender][v]
+    local ifEntry = self._inFlight[sender][v]
+
+    if not entry then
+        -- First chunk of this transfer.
+        entry = {
+            total    = total,
+            received = 0,
+            chunks   = {},
+            adler    = adler,
+        }
+        pc[sender][v] = entry
+
+        ifEntry = {
+            received    = 0,
+            total       = total,
+            startedAt   = time(),
+            timerHandle = nil,
+        }
+        self._inFlight[sender][v] = ifEntry
+
+        -- Schedule the 30-second timeout.
+        ifEntry.timerHandle = addon:ScheduleTimer(function()
+            self:_onChunkTimeout(sender, v)
+        end, CHUNK_TIMEOUT)
+    else
+        -- Subsequent chunk: sanity-check total consistency.
+        if entry.total ~= total then
+            self:_recordWarning(sender, string.format(
+                "DATACHUNK total mismatch: expected %d got %d from %s",
+                entry.total, total, sender))
+            self:_cancelTransfer(sender, v)
+            return
+        end
+        -- Sanity-check adler consistency across chunks.
+        -- Each chunk envelope must carry the same Adler32 value.
+        if not adlerEquals(entry.adler, adler) then
+            self:_recordWarning(sender, string.format(
+                "DATACHUNK adler mismatch across chunks from %s", sender))
+            self:_cancelTransfer(sender, v)
+            return
+        end
+    end
+
+    -- Ignore duplicate seq (idempotent; received count only increments on new seq).
+    if entry.chunks[seq] then return end
+
+    -- Store chunk.
+    entry.chunks[seq] = chunk
+    entry.received    = entry.received + 1
+    if ifEntry then
+        ifEntry.received = entry.received
+    end
+
+    -- Fire progress event for future 3.12 toast (consumed only when that plan ships).
+    addon:SendMessage("BobleLoot_SyncProgress", sender, entry.received, total)
+
+    -- Check if complete.
+    if entry.received < total then return end
+
+    -- All chunks arrived. Cancel timeout timer.
+    if ifEntry and ifEntry.timerHandle then
+        addon:CancelTimer(ifEntry.timerHandle)
+        ifEntry.timerHandle = nil
+    end
+
+    -- Reassemble.
+    local fullPayload = reassembleChunks(entry.chunks, total)
+    if not fullPayload then
+        self:_recordWarning(sender, "DATACHUNK reassembly failed (missing seq)")
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Decode (decompress + deserialize). decodeData returns (data, serialized).
+    local data, serialized = decodeData(fullPayload)
+    if not serialized then
+        self:_recordWarning(sender, "DATACHUNK decode failure after reassembly")
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Verify Adler32 over the reassembled serialized string.
+    -- The Adler32 mismatch warning is emitted once per transfer attempt by
+    -- construction: _cancelTransfer removes the entry immediately after, so
+    -- a retry from the same sender+version pair would create a fresh entry
+    -- and be logged again. No additional per-transfer throttle is needed.
+    local actualAdler = LibDeflate:Adler32(serialized)
+    if not adlerEquals(actualAdler, entry.adler) then
+        DEFAULT_CHAT_FRAME:AddMessage(string.format(
+            "|cffff6666[BobleLoot]|r Dropped chunked data from %s: Adler32 mismatch " ..
+            "(got %d, expected %d)",
+            sender, actualAdler, entry.adler))
+        self:_recordWarning(sender, string.format(
+            "DATACHUNK Adler32 mismatch got=%d expected=%d", actualAdler, entry.adler))
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Validate structure.
+    if not data or type(data.characters) ~= "table" then
+        self:_recordWarning(sender, "DATACHUNK reassembled data has no characters table")
+        self:_cancelTransfer(sender, v)
+        return
+    end
+
+    -- Promote to live dataset.
+    _G.BobleLoot_Data = data
+    if _G.BobleLootSyncDB then
+        _G.BobleLootSyncDB.data = data
+    end
+
+    addon:Print(string.format(
+        "received dataset from %s via %d chunks (%d characters, version %s) [Adler32 OK]",
+        sender, total, countChars(data), tostring(data.generatedAt)))
+
+    -- Clean up pending state.
+    self:_cancelTransfer(sender, v)
+end
+
 ----------------------------------------------------------------------------
 -- proto-version gate
 ----------------------------------------------------------------------------
@@ -336,12 +702,17 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
             -- Log negotiation once per session per sender (informational, not a warning).
             if not (self.peers[sender] and self.peers[sender]._pvLogged) then
                 self.peers[sender]._pvLogged = true
+                local chunkedNote = (negotiated >= 3)
+                    and " [DATACHUNK enabled]"
+                    or  " [legacy DATA fallback]"
                 DEFAULT_CHAT_FRAME:AddMessage(string.format(
-                    "|cffffff00[BobleLoot]|r Proto negotiated with %s: speaking v%d " ..
+                    "|cffffff00[BobleLoot]|r Proto negotiated with %s: speaking v%d%s " ..
                     "(peer max=%d, ours=%d)",
-                    sender, negotiated, peerPv, PROTO_VERSION))
+                    sender, negotiated, chunkedNote, peerPv, PROTO_VERSION))
             end
         end
+        -- When peerPv == PROTO_VERSION (both pv=3), no log is emitted.
+        -- Both peers silently use DATACHUNK.
 
         -- Existing version-compare and REQ logic (unchanged in behaviour).
         local mine = getDataVersion(addon:GetData())
@@ -390,7 +761,22 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
             ns.LootFrame:Refresh()
         end
 
+    elseif msg.kind == KIND_DATACHUNK then
+        -- Only process DATACHUNK from proto=3 envelopes.
+        -- _checkProto already confirmed proto is within [MIN_PROTO_VERSION..PROTO_VERSION];
+        -- additionally gate that this specific kind requires proto=3.
+        if not (msg.proto and msg.proto >= 3) then
+            self:_recordWarning(sender, "DATACHUNK on proto < 3 rejected")
+            return
+        end
+        -- Only accept from group members (same guard as DATA/SCORES).
+        if not (UnitInRaid(sender) or UnitInParty(sender)) then return end
+        self:_onReceiveChunk(addon, msg, sender)
+
     elseif msg.kind == KIND_DATA then
+        -- This path handles the legacy single-message DATA transfer (proto <= 2 peers).
+        -- proto=3 peers use DATACHUNK instead; a proto=3 peer should never send KIND_DATA
+        -- but we tolerate it gracefully by processing it normally here.
         local mine = getDataVersion(addon:GetData())
         if not newerThan(msg.v, mine) then return end
 
@@ -458,6 +844,10 @@ end
 ----------------------------------------------------------------------------
 
 function Sync:Setup(addon)
+    -- Store addon reference so timer callbacks can reach Sync methods without
+    -- capturing a local. Must be set before any ScheduleTimer calls.
+    Sync._addonRef = addon
+
     -- Restore previously synced data if no fresh local file is present
     -- *or* if the synced one is newer.
     _G.BobleLootSyncDB = _G.BobleLootSyncDB or {}
@@ -471,6 +861,15 @@ function Sync:Setup(addon)
 
     -- Initialize per-session peer table (re-learned via HELLO on each login).
     Sync.peers = {}   -- [senderName] = { pv = N }; populated on HELLO receive
+
+    -- In-flight transfer state; keyed by sender name then version string.
+    -- Mirrors BobleLootSyncDB.pendingChunks but the timer handles live here
+    -- (timers cannot be serialized into SavedVariables).
+    Sync._inFlight = {}   -- [sender][version] = { received=N, total=M, startedAt=t, timerHandle=h }
+
+    -- Discard any chunks left over from a previous session (timers don't survive reload).
+    -- Plan 2B will call this from its migration runner; until 2B ships, call it here.
+    self:PrunePendingChunks()
 
     local saved = _G.BobleLootSyncDB.data
     if saved and saved.characters then
