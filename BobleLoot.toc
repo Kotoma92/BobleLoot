@@ -23,6 +23,7 @@ LootHistory.lua
 TestRunner.lua
 
 UI\Theme.lua
+UI\ComparePopout.lua
 UI\SettingsPanel.lua
 UI\MinimapButton.lua
 UI\ExplainPanel.lua

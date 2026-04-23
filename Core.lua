@@ -131,6 +131,9 @@ function BobleLoot:OnInitialize()
 end
 
 function BobleLoot:OnEnable()
+    if ns.ComparePopout and ns.ComparePopout.Setup then
+        ns.ComparePopout:Setup(self)
+    end
     if ns.Sync and ns.Sync.Setup then
         ns.Sync:Setup(self)
     end
