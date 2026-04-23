@@ -424,12 +424,42 @@ function BobleLoot:OnSlashCommand(input)
         if ns.TestRunner and ns.TestRunner.Run then
             ns.TestRunner:Run(self, n, self.db.profile.testUseDatasetItems)
         end
+    elseif input:match("^wasteloot%s+") then
+        local name, link = input:match("^wasteloot%s+(%S+)%s+(|?.*)")
+        if name and link and link ~= "" then
+            local itemID = C_Item and C_Item.GetItemInfoInstant and
+                select(2, C_Item.GetItemInfoInstant(link))
+            if itemID and ns.LootHistory then
+                ns.LootHistory:MarkWasted(name, itemID, self.db.profile)
+                self:Print(string.format("Marked item %d wasted for %s.", itemID, name))
+            else
+                self:Print("Could not resolve item from link. Paste the item link directly.")
+            end
+        else
+            self:Print("Usage: /bl wasteloot <Name-Realm> <itemlink>")
+        end
+    elseif input == "wastedloot list" or input == "wasteloot list" then
+        local map = self.db.profile.wastedLootMap
+        if not map or not next(map) then
+            self:Print("No wasted-loot entries recorded.")
+        else
+            local count = 0
+            for fp, _ in pairs(map) do
+                self:Print("  wasted: " .. fp)
+                count = count + 1
+            end
+            self:Print(string.format("Total: %d wasted entry(s).", count))
+        end
+    elseif input == "wastedloot clear" or input == "wasteloot clear" then
+        self.db.profile.wastedLootMap = {}
+        self:Print("Wasted-loot map cleared.")
     else
         self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | " ..
             "/bl transparency on|off | /bl conflict <0-20> | /bl checkdata | /bl lootdb | " ..
             "/bl trust add|remove|list <Name-Realm> | " ..
             "/bl debugchar <Name-Realm> | /bl test [N] | " ..
             "/bl score <itemID> <Name-Realm> | /bl syncwarnings | /bl syncinflight | " ..
-            "/bl explain <Name-Realm>")
+            "/bl explain <Name-Realm> | " ..
+            "/bl wasteloot <Name-Realm> <link> | /bl wastedloot list | /bl wastedloot clear")
     end
 end

@@ -520,6 +520,36 @@ function LH:DedupRCSavedVar()
     return removed
 end
 
+-- ── Wasted-loot API (3.5) ────────────────────────────────────────────────
+
+-- Deterministic fingerprint for a (recipient, itemID) pair.
+-- Deliberately excludes timestamp so the key is stable across Apply calls.
+function LH:MakeFingerprint(name, itemID)
+    return tostring(name) .. ":" .. tostring(itemID)
+end
+
+-- Record a fresh RC award in Core's pending-awards table so TRADE_CLOSED
+-- can match against it within the 5-minute window.
+function LH:RegisterPendingAward(addonObj, name, itemID)
+    if not addonObj or not addonObj._pendingAwards then return end
+    local fp = self:MakeFingerprint(name, itemID)
+    addonObj._pendingAwards[fp] = { name = name, itemID = itemID, ts = time() }
+end
+
+-- Flag a (name, itemID) pair as wasted in the persistent profile map.
+-- Safe to call multiple times for the same pair (idempotent).
+function LH:MarkWasted(name, itemID, profile)
+    if not profile or not profile.wastedLootMap then return end
+    local fp = self:MakeFingerprint(name, itemID)
+    profile.wastedLootMap[fp] = true
+end
+
+function LH:IsWasted(name, itemID, profile)
+    if not profile or not profile.wastedLootMap then return false end
+    local fp = self:MakeFingerprint(name, itemID)
+    return profile.wastedLootMap[fp] == true
+end
+
 function LH:Setup(addon)
     self.addon = addon
     -- Apply once after a short delay so RC has fully loaded its DB.
@@ -541,6 +571,26 @@ function LH:Setup(addon)
             return
         end
         if self.lastApply and (time() - self.lastApply) < 10 then return end
+
+        -- Register the most recent RC award as a pending wasted-loot candidate.
+        -- RC does not fire a dedicated addon event here, so we read the active
+        -- session's last award from the RC addon object if available.
+        local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
+        if RC then
+            local session = RC.GetCurrentSession and RC:GetCurrentSession()
+            if session then
+                for _, candidate in pairs(session) do
+                    if candidate.awarded and candidate.name and candidate.link then
+                        local iid = C_Item and C_Item.GetItemInfoInstant and
+                            select(2, C_Item.GetItemInfoInstant(candidate.link))
+                        if iid then
+                            self:RegisterPendingAward(addon, candidate.name, iid)
+                        end
+                    end
+                end
+            end
+        end
+
         C_Timer.After(2, function() self:Apply(addon) end)
     end)
 end
