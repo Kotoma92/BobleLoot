@@ -94,9 +94,29 @@ function BobleLoot:OnEnable()
     if ns.MinimapButton and ns.MinimapButton.Setup then
         ns.MinimapButton:Setup(self)
     end
+    -- Great Vault collection tracking (Batch 2.4).
+    if C_WeeklyRewards then
+        self:RegisterEvent("WEEKLY_REWARDS_ITEM_GRABBED", "OnVaultItemGrabbed")
+    end
     -- Hook RCLootCouncil if present; otherwise wait for it to load.
     if not self:TryHookRC() then
         self:RegisterEvent("ADDON_LOADED", "OnAddonLoaded")
+    end
+end
+
+function BobleLoot:OnVaultItemGrabbed(event, itemLocation)
+    -- itemLocation is a C_Item.ItemLocation. Resolve name and ilvl.
+    local playerName = UnitName("player")
+    local realm      = GetRealmName and GetRealmName() or ""
+    realm = realm:gsub("%s+", "")
+    local fullName   = (playerName and realm ~= "") and (playerName .. "-" .. realm)
+                       or playerName or "Unknown"
+    local link  = (itemLocation and C_Item and C_Item.GetItemLink)
+                  and C_Item.GetItemLink(itemLocation) or nil
+    local ilvl  = (itemLocation and C_Item and C_Item.GetCurrentItemLevel)
+                  and C_Item.GetCurrentItemLevel(itemLocation) or nil
+    if ns.LootHistory and ns.LootHistory.RecordVaultSelection then
+        ns.LootHistory:RecordVaultSelection(self, fullName, link, ilvl)
     end
 end
 

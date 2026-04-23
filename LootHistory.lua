@@ -220,16 +220,58 @@ local function effectiveWeights(profile)
     }
 end
 
+-- Record a Great Vault selection as a synthetic loot history entry.
+-- Called from Core.lua's WEEKLY_REWARDS_ITEM_GRABBED handler.
+function LH:RecordVaultSelection(addon, playerName, itemLink, ilvl)
+    local profile = addon.db.profile
+    profile.vaultEntries = profile.vaultEntries or {}
+    local entry = {
+        player   = playerName,
+        link     = itemLink,
+        ilvl     = ilvl,
+        response = "vault",
+        time     = time(),
+    }
+    table.insert(profile.vaultEntries, entry)
+    -- Kick off a debounced re-apply so the score updates promptly.
+    if ns.SettingsPanel and ns.SettingsPanel.ScheduleLootHistoryApply then
+        ns.SettingsPanel.ScheduleLootHistoryApply()
+    end
+end
+
 -- Build name -> { total = weighted sum, counts = {bis=N, major=N, ...} }
-function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl)
+function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries)
     local cutoff = nil
     if days and days > 0 then
         cutoff = time() - days * 24 * 3600
     end
     minIlvl = minIlvl or 0
+
+    -- Merge synthetic entries (vault selections) into a copy of rcLootDB
+    -- so we do not mutate RC's own SavedVariables.
+    local merged = {}
+    if type(rcLootDB) == "table" then
+        for name, entries in pairs(rcLootDB) do
+            if type(entries) == "table" then
+                merged[name] = {}
+                for _, e in ipairs(entries) do
+                    merged[name][#merged[name] + 1] = e
+                end
+            end
+        end
+    end
+    if type(extraEntries) == "table" then
+        for _, e in ipairs(extraEntries) do
+            local name = e.player
+            if type(name) == "string" and name ~= "" then
+                merged[name] = merged[name] or {}
+                merged[name][#merged[name] + 1] = e
+            end
+        end
+    end
+
     local result = {}
-    if type(rcLootDB) ~= "table" then return result end
-    for name, entries in pairs(rcLootDB) do
+    for name, entries in pairs(merged) do
         if type(entries) == "table" then
             local row = { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0, vault = 0 } }
             for _, e in ipairs(entries) do
@@ -269,7 +311,8 @@ function LH:Apply(addon)
     local days    = profile.lootHistoryDays or DEFAULT_DAYS
     local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
     local weights = effectiveWeights(profile)
-    local rows    = self:CountItemsReceived(db, days, weights, minIlvl)
+    local rows    = self:CountItemsReceived(db, days, weights, minIlvl,
+                                            profile.vaultEntries or {})
     local matched, scanned = 0, 0
     for name, _ in pairs(rows) do scanned = scanned + 1 end
     for name, char in pairs(data.characters) do
