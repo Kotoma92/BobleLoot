@@ -394,6 +394,34 @@ local function BuildFrame()
         pageLabel:SetPoint("BOTTOM", frame, "BOTTOM", 0, 8)
         frame._pageLabel = pageLabel
     end
+
+    -- ── Empty-state labels (4.12) ─────────────────────────────────────
+    -- Shown mutually exclusively when the row count is zero.
+    -- Anchored to the frame body (below the filter bar) so they work in
+    -- both the lib-st and fallback paths.
+    local emptyFiltered = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    emptyFiltered:SetFont(T.fontBody, T.sizeBody)
+    emptyFiltered:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    emptyFiltered:SetText(
+        "No loot entries match the current filters.\n"
+        .. "Try widening the date window or check that\n"
+        .. "RC loot history has been recorded.")
+    emptyFiltered:SetJustifyH("CENTER")
+    emptyFiltered:SetPoint("CENTER", frame, "CENTER", 0, -20)
+    emptyFiltered:Hide()
+    frame._emptyFiltered = emptyFiltered
+
+    local emptyNoRC = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    emptyNoRC:SetFont(T.fontBody, T.sizeBody)
+    emptyNoRC:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    emptyNoRC:SetText(
+        "No loot history found.\n"
+        .. "RC loot history is recorded while you are\n"
+        .. "in a raid using RCLootCouncil.")
+    emptyNoRC:SetJustifyH("CENTER")
+    emptyNoRC:SetPoint("CENTER", frame, "CENTER", 0, -20)
+    emptyNoRC:Hide()
+    frame._emptyNoRC = emptyNoRC
 end
 
 -- ── lib-st data population ────────────────────────────────────────────
@@ -550,6 +578,26 @@ function HV:Refresh()
     if not frame or not frame:IsShown() then return end
     LoadRows()
     if frame._refreshDropdown then frame._refreshDropdown() end
+
+    -- Show the appropriate empty-state label when there are no rows (4.12).
+    local hasFilters = (currentFilter ~= nil)
+                       or (currentDays ~= nil
+                           and currentDays < (addon and addon.db
+                                              and addon.db.profile.lootHistoryDays
+                                              or 28))
+    if #rawRows == 0 then
+        if hasFilters then
+            if frame._emptyFiltered then frame._emptyFiltered:Show() end
+            if frame._emptyNoRC    then frame._emptyNoRC:Hide()      end
+        else
+            if frame._emptyFiltered then frame._emptyFiltered:Hide() end
+            if frame._emptyNoRC    then frame._emptyNoRC:Show()      end
+        end
+    else
+        if frame._emptyFiltered then frame._emptyFiltered:Hide() end
+        if frame._emptyNoRC    then frame._emptyNoRC:Hide()      end
+    end
+
     if libST then
         PopulateLibST()
     else
