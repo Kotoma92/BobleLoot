@@ -81,6 +81,9 @@ function BobleLoot:OnInitialize()
     if ns.SettingsPanel and ns.SettingsPanel.Setup then
         ns.SettingsPanel:Setup(self)
     end
+    if ns.ExplainPanel and ns.ExplainPanel.Setup then
+        ns.ExplainPanel:Setup(self)
+    end
 end
 
 function BobleLoot:OnEnable()
@@ -223,6 +226,20 @@ function BobleLoot:OnSlashCommand(input)
         else
             self:Print("Usage: /bl score <itemID> <Name-Realm>")
         end
+    elseif input:match("^explain") then
+        -- /bl explain <Name-Realm>   or   /bl explain   (re-opens last)
+        local name = input:match("^explain%s+(.+)$")
+        if ns.ExplainPanel then
+            if name then
+                -- Trim trailing spaces from the name.
+                name = name:match("^%s*(.-)%s*$")
+                ns.ExplainPanel:OpenFor(name)
+            else
+                ns.ExplainPanel:OpenLast()
+            end
+        else
+            self:Print("ExplainPanel not loaded.")
+        end
     elseif input == "checkdata" or input == "remind" then
         if ns.RaidReminder and ns.RaidReminder.ForceCheck then
             ns.RaidReminder:ForceCheck(self)
@@ -275,6 +292,7 @@ function BobleLoot:OnSlashCommand(input)
         self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | " ..
             "/bl transparency on|off | /bl conflict <0-20> | /bl checkdata | /bl lootdb | " ..
             "/bl debugchar <Name-Realm> | /bl test [N] | " ..
-            "/bl score <itemID> <Name-Realm> | /bl syncwarnings")
+            "/bl score <itemID> <Name-Realm> | /bl syncwarnings | " ..
+            "/bl explain <Name-Realm>")
     end
 end
