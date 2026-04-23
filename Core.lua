@@ -222,6 +222,26 @@ function BobleLoot:OnSlashCommand(input)
                 end
             end
         end
+    elseif input == "syncinflight" then
+        if ns.Sync and ns.Sync.GetInflightTransfers then
+            local transfers = ns.Sync:GetInflightTransfers()
+            local count = 0
+            for sender, info in pairs(transfers) do
+                count = count + 1
+                self:Print(string.format(
+                    "  %s: %d/%d chunks (version %s, started %s ago)",
+                    sender,
+                    info.received,
+                    info.total,
+                    tostring(info.version),
+                    tostring(math.floor(time() - info.startedAt)) .. "s"))
+            end
+            if count == 0 then
+                self:Print("No chunked transfers currently in flight.")
+            end
+        else
+            self:Print("Sync module not loaded.")
+        end
     elseif input == "test" or input:match("^test%s+%d+$") then
         local n = tonumber(input:match("^test%s+(%d+)$")) or self.db.profile.testItemCount or 5
         if ns.TestRunner and ns.TestRunner.Run then
@@ -231,6 +251,6 @@ function BobleLoot:OnSlashCommand(input)
         self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | " ..
             "/bl transparency on|off | /bl checkdata | /bl lootdb | " ..
             "/bl debugchar <Name-Realm> | /bl test [N] | " ..
-            "/bl score <itemID> <Name-Realm> | /bl syncwarnings")
+            "/bl score <itemID> <Name-Realm> | /bl syncwarnings | /bl syncinflight")
     end
 end
