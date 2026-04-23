@@ -87,6 +87,23 @@ Migrations.list = {
                 "|cffffcc00BobleLoot migration v2:|r initialised scoreHistory and wastedLootMap.")
         end,
     },
+    -- v3: Initialise 4.2 catalyst/tier-token synthetic history keys.
+    -- Safe to run on any profile version < 3; idempotent (only sets nil keys).
+    -- AceDB defaults cover fresh installs; this migration covers old profiles
+    -- that existed before Batch 4B shipped.
+    {
+        version = 3,
+        up = function(profile)
+            if profile.synthHistory == nil then
+                profile.synthHistory = {}
+            end
+            if profile.synthWeight == nil then
+                profile.synthWeight = 0.75
+            end
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "|cffffcc00BobleLoot migration v3:|r initialised synthHistory and synthWeight.")
+        end,
+    },
 }
 
 ----------------------------------------------------------------------------

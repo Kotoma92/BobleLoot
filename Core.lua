@@ -76,6 +76,9 @@ local DB_DEFAULTS = {
         historyCap   = 5,
         conflictThreshold = 5,   -- 2.10: ~prefix when top-two gap <= this
         suppressTransparencyLabel = false,  -- 2.11: player hides BL label even when leader enables transparency
+        -- 4.2: Catalyst / tier-token synthetic loot tracking.
+        synthWeight  = 0.75,  -- weight relative to a normal RC drop (1.0). Configurable.
+        synthHistory = {},    -- list of { name, itemID, itemLink, t, synthType, weight }
         minimap  = { hide = false, minimapPos = 220 },
         panelPos = { point = "CENTER", x = 0, y = 0 },
         historyViewerPos = { point = "CENTER", x = 0, y = 0 },
