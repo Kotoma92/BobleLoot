@@ -1131,3 +1131,84 @@ def test_fetch_rows_returns_missing_wishlists_list(monkeypatch):
     assert len(result) == 4
     rows, weeks, warnings, missing = result
     assert "Kotoma-TwistingNether" in missing
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — Versioned BiS directory
+# ---------------------------------------------------------------------------
+
+def test_load_bis_from_file_unchanged(tmp_path):
+    """load_bis with a file path behaves identically to the old direct json.load."""
+    bis_file = tmp_path / "bis.json"
+    bis_file.write_text(
+        '{"Boble-Stormrage": [212401, 212403], "Kotoma-TwistingNether": [212450]}',
+        encoding="utf-8",
+    )
+    result = wa.load_bis(bis_file)
+    assert result == {
+        "Boble-Stormrage": [212401, 212403],
+        "Kotoma-TwistingNether": [212450],
+    }
+
+
+def test_load_bis_from_directory_merges_files(tmp_path):
+    """load_bis merges all .json files found directly in a directory."""
+    bis_dir = tmp_path / "bis"
+    bis_dir.mkdir()
+    (bis_dir / "paladin-holy.json").write_text(
+        '{"Boble-Stormrage": [212401, 212403]}', encoding="utf-8"
+    )
+    (bis_dir / "warrior-protection.json").write_text(
+        '{"Kotoma-TwistingNether": [212450]}', encoding="utf-8"
+    )
+    result = wa.load_bis(bis_dir)
+    assert result["Boble-Stormrage"] == [212401, 212403]
+    assert result["Kotoma-TwistingNether"] == [212450]
+
+
+def test_load_bis_directory_deduplicates_item_ids(tmp_path):
+    """When two files list the same character, item IDs are merged without duplicates."""
+    bis_dir = tmp_path / "bis"
+    bis_dir.mkdir()
+    (bis_dir / "file1.json").write_text(
+        '{"Boble-Stormrage": [212401, 212403]}', encoding="utf-8"
+    )
+    (bis_dir / "file2.json").write_text(
+        '{"Boble-Stormrage": [212403, 212500]}', encoding="utf-8"
+    )
+    result = wa.load_bis(bis_dir)
+    items = result["Boble-Stormrage"]
+    assert sorted(items) == [212401, 212403, 212500]
+    # No duplicates.
+    assert len(items) == len(set(items))
+
+
+def test_load_bis_empty_directory_returns_empty(tmp_path):
+    """An empty directory returns an empty mapping."""
+    bis_dir = tmp_path / "bis"
+    bis_dir.mkdir()
+    result = wa.load_bis(bis_dir)
+    assert result == {}
+
+
+def test_load_bis_nested_directory_walks_recursively(tmp_path):
+    """load_bis finds .json files in subdirectories."""
+    bis_dir = tmp_path / "bis"
+    subdir = bis_dir / "tww-s3"
+    subdir.mkdir(parents=True)
+    (subdir / "paladin-holy.json").write_text(
+        '{"Boble-Stormrage": [212401]}', encoding="utf-8"
+    )
+    result = wa.load_bis(bis_dir)
+    assert result == {"Boble-Stormrage": [212401]}
+
+
+def test_load_bis_skips_non_json_files(tmp_path):
+    """Non-.json files in the directory are ignored."""
+    bis_dir = tmp_path / "bis"
+    bis_dir.mkdir()
+    (bis_dir / "paladin-holy.json").write_text('{"Boble-Stormrage": [212401]}', encoding="utf-8")
+    (bis_dir / "README.md").write_text("# BiS files", encoding="utf-8")
+    (bis_dir / "notes.txt").write_text("some notes", encoding="utf-8")
+    result = wa.load_bis(bis_dir)
+    assert result == {"Boble-Stormrage": [212401]}

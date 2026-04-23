@@ -107,6 +107,63 @@ def _load_tier_preset(tier_name: str) -> dict:
         sys.exit(f"Failed to load tier preset '{tier_name}': {exc}")
 
 # --------------------------------------------------------------------------
+# BiS loader — file or versioned directory
+# --------------------------------------------------------------------------
+
+def load_bis(path: Path) -> dict[str, list[int]]:
+    """Load a BiS mapping from a JSON file or a directory of JSON files.
+
+    When ``path`` is a file, it is read directly and expected to be a JSON
+    object of the form ``{ "Name-Realm": [itemID, ...] }``.
+
+    When ``path`` is a directory, every ``*.json`` file in the directory
+    tree (at any depth) is discovered and merged. This supports the versioned
+    layout ``bis/<tier>/<class>-<spec>.json``. When the same character appears
+    in multiple files, their item-ID lists are merged with deduplication.
+
+    Non-``.json`` files (README, notes, etc.) are silently ignored.
+
+    Args:
+        path: A ``Path`` to either a JSON file or a directory.
+
+    Returns:
+        Mapping of ``"Name-Realm"`` to a deduplicated sorted list of BiS
+        item IDs (as integers).
+
+    Raises:
+        SystemExit: If ``path`` does not exist.
+        json.JSONDecodeError: If any discovered file contains invalid JSON.
+        OSError: If a file cannot be opened.
+    """
+    if not path.exists():
+        sys.exit(f"--bis path not found: {path}")
+
+    if path.is_file():
+        with path.open(encoding="utf-8") as f:
+            raw: dict = json.load(f)
+        return {
+            k: [int(x) for x in v]
+            for k, v in raw.items()
+            if not k.startswith("_") and isinstance(v, list)
+        }
+
+    # Directory: walk recursively, collecting all .json files.
+    merged: dict[str, set[int]] = {}
+    for json_file in sorted(path.rglob("*.json")):
+        with json_file.open(encoding="utf-8") as f:
+            data: dict = json.load(f)
+        for name, ids in data.items():
+            # Skip metadata keys (e.g. "_comment") and non-list values.
+            if name.startswith("_") or not isinstance(ids, list):
+                continue
+            if name not in merged:
+                merged[name] = set()
+            merged[name].update(int(x) for x in ids)
+
+    return {name: sorted(ids) for name, ids in merged.items()}
+
+
+# --------------------------------------------------------------------------
 # CSV / XLSX reading
 # --------------------------------------------------------------------------
 
@@ -966,9 +1023,7 @@ def main():
         if args.bis is None:
             sys.exit("--bis is required when using --wowaudit.")
         rows = _read_table(args.wowaudit)
-        with args.bis.open(encoding="utf-8") as f:
-            bis_raw = json.load(f)
-        bis = {k: [int(x) for x in v] for k, v in bis_raw.items()}
+        bis = load_bis(args.bis)
     else:
         # API fetch mode.
         if not args.api_key:
@@ -985,9 +1040,7 @@ def main():
         if not rows and not fetch_warnings:
             sys.exit("No characters parsed from the API response.")
         if args.bis is not None:
-            with args.bis.open(encoding="utf-8") as f:
-                bis_raw = json.load(f)
-            bis = {k: [int(x) for x in v] for k, v in bis_raw.items()}
+            bis = load_bis(args.bis)
         else:
             # wowaudit's API doesn't expose a BiS flag; supply --bis to populate.
             bis = {}
