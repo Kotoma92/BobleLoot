@@ -1236,6 +1236,10 @@ function BuildDataTab(parent)
     -- Shown when TryHookRC never succeeded after the 10-second grace period.
     -- Auto-hides when BobleLoot_RCDetected fires (RC loaded later in session).
     -- Hidden by default; shown via BobleLoot_RCMissing AceEvent.
+    -- 4.12 audit: banner text verified to match roadmap 4.10 canonical wording.
+    -- RC version-compat line (below) reads live state via RCCompat:GetStatus(),
+    -- so it never shows stale data. Layout order: banner → schema → info → actions
+    -- → RC integration → transparency — matches 4.12 Task 12.3 spec.
 
     local rcBannerCard, rcBannerInner = MakeSection(body, "")
     rcBannerCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
