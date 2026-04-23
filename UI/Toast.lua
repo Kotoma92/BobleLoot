@@ -152,11 +152,10 @@ function Toast:Setup(addonArg)
         Toast:Show(msg, "success")
     end)
 
-    -- Chunked sync timeout (Batch 2C contract).
-    -- Arguments: sender (string).
+    -- Chunked sync timeout (Batch 2C contract). Roadmap 4.12 exact wording.
+    -- Arguments: sender (string) — unused in display; message is fixed per spec.
     addon:RegisterMessage("BobleLoot_SyncTimedOut", function(_, sender)
-        local msg = string.format("[BL] Sync from %s timed out — using local data.", sender)
-        Toast:Show(msg, "error")
+        Toast:Show("Dataset sync timed out \xe2\x80\x94 using local data.", "warning")
     end)
 
     --[[ CROSS-CONTRACT: Batch 3C
