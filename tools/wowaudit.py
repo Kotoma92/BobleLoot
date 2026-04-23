@@ -1287,6 +1287,28 @@ def main():
             "Items with a score strictly greater than this value are marked BiS."
         ),
     )
+    ap.add_argument(
+        "--renames",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Path to a renames.json sidecar. "
+            "Default: tools/renames.json (sibling of wowaudit.py). "
+            "Format: {'Old-Realm': 'New-Realm'}."
+        ),
+    )
+    ap.add_argument(
+        "--score-overrides",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Path to a score-overrides.json sidecar. "
+            "Default: tools/score-overrides.json. "
+            "Format: {'itemID': float}."
+        ),
+    )
     args = ap.parse_args()
 
     # Apply tier preset (values are only used as defaults if the
@@ -1373,7 +1395,11 @@ def main():
         history_cap = int(soft_floor_override)
 
     # Load rename sidecar (item 4.5).
-    renames_path = Path(__file__).resolve().parent / "renames.json"
+    # --renames overrides the default sibling path (for CI with custom paths).
+    renames_path = (
+        args.renames if args.renames is not None
+        else Path(__file__).resolve().parent / "renames.json"
+    )
     renames: dict[str, str] = {}
     if renames_path.is_file():
         try:
@@ -1384,7 +1410,7 @@ def main():
                 and not k.startswith("_")
             }
         except (json.JSONDecodeError, OSError) as exc:
-            print(f"[WARN] Failed to load tools/renames.json: {exc}", file=sys.stderr)
+            print(f"[WARN] Failed to load {renames_path}: {exc}", file=sys.stderr)
 
     # Apply renames to rows and BiS keys before emission.
     renamed = _apply_renames(rows, bis, renames)
@@ -1392,7 +1418,11 @@ def main():
     bis  = renamed["bis"]
 
     # Load score-overrides sidecar (item 4.7).
-    overrides_path = Path(__file__).resolve().parent / "score-overrides.json"
+    # --score-overrides overrides the default sibling path.
+    overrides_path = (
+        args.score_overrides if args.score_overrides is not None
+        else Path(__file__).resolve().parent / "score-overrides.json"
+    )
     score_overrides: dict[int, float] = {}
     if overrides_path.is_file():
         try:
@@ -1409,7 +1439,7 @@ def main():
                         file=sys.stderr,
                     )
         except (json.JSONDecodeError, OSError) as exc:
-            print(f"[WARN] Failed to load tools/score-overrides.json: {exc}",
+            print(f"[WARN] Failed to load {overrides_path}: {exc}",
                   file=sys.stderr)
 
     try:

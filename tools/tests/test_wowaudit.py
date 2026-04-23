@@ -1640,3 +1640,18 @@ def test_score_overrides_numeric_values_only(monkeypatch):
                        score_overrides=overrides)
     assert "[212405] = 75.0" in lua
     assert "bad-value" not in lua
+
+
+# ---------------------------------------------------------------------------
+# Task 4A-8 — --renames and --score-overrides CLI flags (item 4.5 / 4.7)
+# ---------------------------------------------------------------------------
+
+def test_renames_path_default_is_sibling_of_wowaudit():
+    """Default renames path is tools/renames.json."""
+    wowaudit_path = TOOLS_DIR / "wowaudit.py"
+    assert (wowaudit_path.parent / "renames.json").is_file()
+
+
+def test_score_overrides_path_default_is_sibling():
+    """Default score-overrides path is tools/score-overrides.json."""
+    assert (TOOLS_DIR / "score-overrides.json").is_file()
