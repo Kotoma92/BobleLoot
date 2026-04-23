@@ -720,7 +720,22 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
             ns.LootFrame:Refresh()
         end
 
+    elseif msg.kind == KIND_DATACHUNK then
+        -- Only process DATACHUNK from proto=3 envelopes.
+        -- _checkProto already confirmed proto is within [MIN_PROTO_VERSION..PROTO_VERSION];
+        -- additionally gate that this specific kind requires proto=3.
+        if not (msg.proto and msg.proto >= 3) then
+            self:_recordWarning(sender, "DATACHUNK on proto < 3 rejected")
+            return
+        end
+        -- Only accept from group members (same guard as DATA/SCORES).
+        if not (UnitInRaid(sender) or UnitInParty(sender)) then return end
+        self:_onReceiveChunk(addon, msg, sender)
+
     elseif msg.kind == KIND_DATA then
+        -- This path handles the legacy single-message DATA transfer (proto <= 2 peers).
+        -- proto=3 peers use DATACHUNK instead; a proto=3 peer should never send KIND_DATA
+        -- but we tolerate it gracefully by processing it normally here.
         local mine = getDataVersion(addon:GetData())
         if not newerThan(msg.v, mine) then return end
 
