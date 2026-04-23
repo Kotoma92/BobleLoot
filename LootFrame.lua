@@ -57,8 +57,13 @@ local function itemIDFromAny(...)
 end
 
 local function entryItemID(entry)
+    local resolver = LF.resolver
+    if resolver and resolver.lootEntryItemID then
+        local ok, id = pcall(resolver.lootEntryItemID, entry)
+        if ok and id then return id end
+    end
+    -- Inline fallback (identical to FALLBACK_RESOLVER.lootEntryItemID).
     if not entry then return nil end
-    -- Try a handful of common shapes.
     return itemIDFromAny(
         entry.link,
         entry.itemLink,
@@ -337,6 +342,7 @@ function LF:Hook(addon, RC)
 
     self.addon     = addon
     self.lootFrame = lootFrame
+    self.resolver  = ns.RCCompat and ns.RCCompat:GetResolver() or nil
     self.hooked    = true
 
     -- Refresh whenever the frame redraws or items get added.
