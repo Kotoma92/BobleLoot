@@ -1498,6 +1498,20 @@ function BuildDataTab(parent)
         end,
     })
 
+    -- Tooltip on the disabled transparency toggle explaining why it is greyed.
+    if transTog and transTog.HookScript then
+        transTog:HookScript("OnEnter", function(self)
+            if UnitIsGroupLeader("player") then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine("|cffddddddBoble Loot \xe2\x80\x94 Transparency|r")
+            GameTooltip:AddLine(
+                "Only the raid leader can toggle transparency mode.",
+                0.53, 0.53, 0.53)
+            GameTooltip:Show()
+        end)
+        transTog:HookScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
     -- 2.11: player-side opt-out — always editable regardless of leadership.
     local suppressTog = MakeToggle(transInner, {
         label = "Hide score label on my screen (overrides leader setting)",
