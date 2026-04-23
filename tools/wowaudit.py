@@ -107,6 +107,51 @@ def _load_tier_preset(tier_name: str) -> dict:
         sys.exit(f"Failed to load tier preset '{tier_name}': {exc}")
 
 # --------------------------------------------------------------------------
+# BiS derivation from wishlist sim scores
+# --------------------------------------------------------------------------
+
+def _derive_bis_from_rows(
+    rows: list[dict],
+    threshold: float = 2.0,
+) -> dict[str, list[int]]:
+    """Derive a BiS mapping from sim scores already present in assembled rows.
+
+    For each character and each ``sim_<itemID>`` column, the item is included
+    in that character's BiS list when its score is **strictly greater than**
+    ``threshold``.  Negative scores (downgrades) are never included.
+
+    This removes the most significant manual maintenance burden from the data
+    pipeline.  The derived BiS is per-character, not per-spec.
+
+    Args:
+        rows: Assembled character rows as returned by ``fetch_rows`` or
+            ``_read_table``.  Each row may contain zero or more ``sim_<id>``
+            keys whose values are numeric sim percentages.
+        threshold: Minimum sim percentage (exclusive) for an item to be
+            considered BiS.  Default is ``2.0`` (a 2% upgrade).
+
+    Returns:
+        Mapping of ``"Name-Realm"`` to a sorted list of BiS item IDs.
+        Characters with no qualifying items are omitted from the mapping.
+    """
+    result: dict[str, list[int]] = {}
+    for row in rows:
+        name = (row.get("character") or "").strip()
+        if not name:
+            continue
+        qualifying: list[int] = []
+        for key, val in row.items():
+            if not (key.startswith("sim_") and key[4:].isdigit()):
+                continue
+            score = _to_float(val, default=0.0)
+            if score > threshold:
+                qualifying.append(int(key[4:]))
+        if qualifying:
+            result[name] = sorted(qualifying)
+    return result
+
+
+# --------------------------------------------------------------------------
 # BiS loader — file or versioned directory
 # --------------------------------------------------------------------------
 
@@ -990,6 +1035,25 @@ def main():
             "Default is spec-aware: only the character's main spec's sim is used."
         ),
     )
+    ap.add_argument(
+        "--bis-from-wishlist",
+        action="store_true",
+        default=False,
+        help=(
+            "Derive BiS membership from WoWAudit wishlist sim scores. "
+            "Any item whose sim score exceeds --bis-threshold (default 2.0%%) "
+            "is marked BiS for that character. Replaces --bis when both are given."
+        ),
+    )
+    ap.add_argument(
+        "--bis-threshold",
+        type=float,
+        default=2.0,
+        help=(
+            "Sim percentage threshold for --bis-from-wishlist (default 2.0). "
+            "Items with a score strictly greater than this value are marked BiS."
+        ),
+    )
     args = ap.parse_args()
 
     # Apply tier preset (values are only used as defaults if the
@@ -1039,7 +1103,15 @@ def main():
         team_url = fetch_team_url(args.api_key)
         if not rows and not fetch_warnings:
             sys.exit("No characters parsed from the API response.")
-        if args.bis is not None:
+        if args.bis_from_wishlist:
+            # Derive BiS from sim scores above the threshold.
+            if args.bis is not None:
+                fetch_warnings.append(
+                    "--bis and --bis-from-wishlist both specified; "
+                    "--bis-from-wishlist takes precedence."
+                )
+            bis = _derive_bis_from_rows(rows, threshold=args.bis_threshold)
+        elif args.bis is not None:
             bis = load_bis(args.bis)
         else:
             # wowaudit's API doesn't expose a BiS flag; supply --bis to populate.

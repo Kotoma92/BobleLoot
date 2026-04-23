@@ -1212,3 +1212,88 @@ def test_load_bis_skips_non_json_files(tmp_path):
     (bis_dir / "notes.txt").write_text("some notes", encoding="utf-8")
     result = wa.load_bis(bis_dir)
     assert result == {"Boble-Stormrage": [212401]}
+
+
+# ---------------------------------------------------------------------------
+# Task 3.3 — _derive_bis_from_rows / --bis-from-wishlist
+# ---------------------------------------------------------------------------
+
+def test_derive_bis_from_rows_basic():
+    """Items whose sim value exceeds threshold are included in the BiS list."""
+    rows = [
+        {"character": "Boble-Stormrage",
+         "mplus_dungeons": 10, "attendance": 80.0,
+         "sim_212401": 3.5, "sim_212403": 0.5},
+    ]
+    result = wa._derive_bis_from_rows(rows, threshold=2.0)
+    assert "Boble-Stormrage" in result
+    assert 212401 in result["Boble-Stormrage"]
+    assert 212403 not in result["Boble-Stormrage"]
+
+
+def test_derive_bis_from_rows_threshold_respected():
+    """Items exactly at the threshold are NOT included (strictly greater than)."""
+    rows = [
+        {"character": "Boble-Stormrage",
+         "mplus_dungeons": 10, "attendance": 80.0,
+         "sim_212401": 2.0, "sim_212403": 2.1},
+    ]
+    result = wa._derive_bis_from_rows(rows, threshold=2.0)
+    assert 212401 not in result.get("Boble-Stormrage", [])
+    assert 212403 in result.get("Boble-Stormrage", [])
+
+
+def test_derive_bis_from_rows_empty_rows():
+    """Empty rows list returns empty dict."""
+    assert wa._derive_bis_from_rows([], threshold=2.0) == {}
+
+
+def test_derive_bis_from_rows_no_sim_cols_returns_empty():
+    """Characters with no sim_ columns produce an empty BiS list."""
+    rows = [
+        {"character": "Boble-Stormrage", "mplus_dungeons": 10, "attendance": 80.0},
+    ]
+    result = wa._derive_bis_from_rows(rows, threshold=2.0)
+    # Either the character is absent or has an empty list.
+    assert result.get("Boble-Stormrage", []) == []
+
+
+def test_derive_bis_from_rows_negative_scores_excluded():
+    """Negative sim values (downgrades) are never included."""
+    rows = [
+        {"character": "Boble-Stormrage",
+         "mplus_dungeons": 10, "attendance": 80.0,
+         "sim_212401": -1.0, "sim_212403": 3.0},
+    ]
+    result = wa._derive_bis_from_rows(rows, threshold=2.0)
+    assert 212401 not in result.get("Boble-Stormrage", [])
+    assert 212403 in result.get("Boble-Stormrage", [])
+
+
+def test_derive_bis_from_rows_multiple_characters():
+    """Each character gets their own independent BiS list."""
+    rows = [
+        {"character": "Boble-Stormrage",
+         "mplus_dungeons": 10, "attendance": 80.0,
+         "sim_212401": 3.5, "sim_212403": 0.5},
+        {"character": "Kotoma-TwistingNether",
+         "mplus_dungeons": 8, "attendance": 70.0,
+         "sim_212401": 0.1, "sim_212403": 4.2},
+    ]
+    result = wa._derive_bis_from_rows(rows, threshold=2.0)
+    assert 212401 in result["Boble-Stormrage"]
+    assert 212403 not in result["Boble-Stormrage"]
+    assert 212403 in result["Kotoma-TwistingNether"]
+    assert 212401 not in result["Kotoma-TwistingNether"]
+
+
+def test_derive_bis_from_rows_custom_threshold():
+    """A high threshold of 5.0 only captures very high-value sims."""
+    rows = [
+        {"character": "Boble-Stormrage",
+         "mplus_dungeons": 10, "attendance": 80.0,
+         "sim_212401": 4.9, "sim_212403": 6.0},
+    ]
+    result = wa._derive_bis_from_rows(rows, threshold=5.0)
+    assert 212401 not in result.get("Boble-Stormrage", [])
+    assert 212403 in result.get("Boble-Stormrage", [])
