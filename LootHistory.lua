@@ -482,6 +482,21 @@ function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, p
     return result
 end
 
+-- item 4.5: resolve a data-file character name to the RC loot-history key.
+-- data.renames maps old RC name -> new data name (emitted by wowaudit.py
+-- from tools/renames.json). To look up a data-file char in RC rows we need
+-- the reverse: given new name, find old name that RC still uses.
+local function resolveRCName(newName, data)
+    if data and data.renames then
+        for oldName, mappedName in pairs(data.renames) do
+            if mappedName == newName then
+                return oldName
+            end
+        end
+    end
+    return newName
+end
+
 -- Walk our loaded data file and overwrite itemsReceived using the live
 -- counts. Names in the data file are "Name-Realm"; RC keys them the same
 -- way ("Sprinty-Doomhammer"), so they line up directly.
@@ -506,7 +521,10 @@ function LH:Apply(addon)
     local matched, scanned = 0, 0
     for name, _ in pairs(rows) do scanned = scanned + 1 end
     for name, char in pairs(data.characters) do
-        local r = rows[name]
+        -- item 4.5: apply character renames before lookup so realm-transferred
+        -- characters are matched by their old RC key when data.renames is present.
+        local rcName = resolveRCName(name, data)
+        local r = rows[rcName]
         if r then
             char.itemsReceived          = r.total
             char.itemsReceivedBreakdown = r.counts
