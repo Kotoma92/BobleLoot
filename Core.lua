@@ -426,6 +426,75 @@ function BobleLoot:OnSlashCommand(input)
         else
             self:Print("LootHistory module not loaded.")
         end
+    elseif input == "history" then
+        if ns.HistoryViewer then
+            ns.HistoryViewer:Toggle()
+        else
+            self:Print("History viewer not loaded.")
+        end
+    elseif input == "benchscore" or input:match("^benchscore%s+%d+$") then
+        --[[ CROSS-CONTRACT: Batch 3B (ns.Scoring:ComputeAll)
+             Roadmap item 3.6: "Compute scores for all roster members.
+               Expose ns.Scoring:ComputeAll(itemID) returning a sorted list."
+             Expected signature: ns.Scoring:ComputeAll(itemID, profile, data)
+             Returns: { { name = "Name-Realm", score = number }, ... } sorted descending.
+             Characters for whom Compute returns nil (missing sim data) are omitted.
+             This handler guards with `if not (ns.Scoring and ns.Scoring.ComputeAll)`
+             and prints a clear fallback until Batch 3B is merged.
+        ]]
+        local itemID = tonumber(input:match("^benchscore%s+(%d+)$"))
+        -- Fall back to current voting frame item if no ID provided.
+        if not itemID and ns.VotingFrame and ns.VotingFrame.currentItemID then
+            itemID = ns.VotingFrame.currentItemID
+        end
+        if not itemID then
+            self:Print("Usage: /bl benchscore <itemID>  (or run during a vote session)")
+            return
+        end
+        if not (ns.Scoring and ns.Scoring.ComputeAll) then
+            self:Print("Bench scoring not available (Scoring:ComputeAll missing — requires Batch 3B).")
+            return
+        end
+        local results = ns.Scoring:ComputeAll(itemID, self.db.profile, self:GetData())
+        if not results or #results == 0 then
+            self:Print("No scores computed. Ensure the dataset is loaded (/bl checkdata).")
+            return
+        end
+        -- Build the formatted output string.
+        local parts = {}
+        for _, entry in ipairs(results) do
+            parts[#parts + 1] = string.format("%s=%d", entry.name, entry.score)
+        end
+        -- Truncate to first 10 players if roster is very large.
+        local MAX_SHOWN = 10
+        local suffix = (#results > MAX_SHOWN)
+            and string.format(" ... (%d more)", #results - MAX_SHOWN)
+            or ""
+        local top = {}
+        for i = 1, math.min(MAX_SHOWN, #results) do top[#top + 1] = parts[i] end
+        local itemLink = select(2, GetItemInfo(itemID)) or tostring(itemID)
+        local output = string.format("[BL Bench] %s: %s%s",
+            itemLink, table.concat(top, ", "), suffix)
+        -- Send to officer channel if available, otherwise party.
+        -- SendChatMessage("OFFICER") silently fails (fires an error frame message)
+        -- if the player lacks officer permissions; the pcall captures this and
+        -- falls back to PARTY so output is never silently dropped.
+        local sent = false
+        if IsInRaid() or IsInGroup() then
+            local ok = pcall(function()
+                SendChatMessage(output, "OFFICER")
+            end)
+            if ok then
+                sent = true
+            end
+        end
+        if not sent then
+            if IsInGroup() then
+                SendChatMessage(output, "PARTY")
+            else
+                self:Print(output)
+            end
+        end
     elseif input:match("^trust%s+add%s+") then
         local name = input:match("^trust%s+add%s+(.+)$")
         if name then self:AddTrustedSender(name) else
@@ -529,6 +598,7 @@ function BobleLoot:OnSlashCommand(input)
     else
         self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | " ..
             "/bl transparency on|off | /bl conflict <0-20> | /bl checkdata | /bl lootdb | " ..
+            "/bl history | /bl benchscore [itemID] | " ..
             "/bl trust add|remove|list <Name-Realm> | " ..
             "/bl debugchar <Name-Realm> | /bl test [N] | " ..
             "/bl score <itemID> <Name-Realm> | /bl syncwarnings | /bl syncinflight | " ..
