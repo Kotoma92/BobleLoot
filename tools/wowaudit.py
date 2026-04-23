@@ -207,6 +207,9 @@ def build_lua(
     history_cap: int,
     team_url: str | None = None,
     fetch_warnings: list[str] | None = None,
+    loot_min_ilvl: int = 0,
+    history_days: int | None = None,
+    tier_name: str | None = None,
 ) -> str:
     """Render BobleLoot_Data.lua from assembled rows.
 
@@ -219,6 +222,10 @@ def build_lua(
         team_url: Optional WoWAudit team URL to embed.
         fetch_warnings: Optional list of warning strings from fetch_rows;
             emitted as Lua comments and a dataWarnings array.
+        loot_min_ilvl: Minimum item level for loot history (from --tier preset
+            or --loot-min-ilvl). Emitted when non-zero.
+        history_days: Optional history window override (from --tier preset).
+        tier_name: Optional tier preset name (e.g. "TWW-S3").
 
     Returns:
         The Lua file contents as a string.
@@ -264,6 +271,12 @@ def build_lua(
     out.append(f"    simCap      = {sim_cap},")
     out.append(f"    mplusCap    = {mplus_cap},")
     out.append(f"    historyCap  = {history_cap},")
+    if tier_name:
+        out.append(f'    tierPreset  = "{_lua_escape(tier_name)}",')
+    if loot_min_ilvl:
+        out.append(f"    lootMinIlvl = {loot_min_ilvl},")
+    if history_days is not None:
+        out.append(f"    historyDays = {history_days},")
 
     # dataWarnings array — Lua side reads this to surface issues in the UI.
     if fetch_warnings:
@@ -282,6 +295,14 @@ def build_lua(
         out.append(f'        ["{_lua_escape(name)}"] = {{')
         out.append(f"            attendance    = {attendance},")
         out.append(f"            mplusDungeons = {mplus},")
+
+        # mainspec and role — only emit if present (convert-mode CSVs won't
+        # have these columns; that's fine, Scoring.lua treats absent = raider).
+        mainspec_val = row.get("mainspec")
+        role_val     = row.get("role", "raider")
+        if mainspec_val:
+            out.append(f'            mainspec      = "{_lua_escape(mainspec_val)}",')
+        out.append(f'            role          = "{_lua_escape(role_val)}",')
 
         bis_ids = bis.get(name) or []
         if bis_ids:

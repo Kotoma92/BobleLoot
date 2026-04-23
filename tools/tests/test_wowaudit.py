@@ -825,3 +825,138 @@ def test_role_map_unknown_status_defaults_to_raider():
     """An unrecognised status string maps to 'raider', not 'trial' or 'bench'."""
     assert wa._ROLE_MAP.get("social", "raider") == "raider"
     assert wa._ROLE_MAP.get("", "raider")        == "raider"
+
+
+# ---------------------------------------------------------------------------
+# Task 2A-3 — build_lua emits mainspec and role fields
+# ---------------------------------------------------------------------------
+
+def test_build_lua_emits_mainspec_when_present():
+    rows = [
+        {"character": "Boble-Stormrage", "attendance": 95.0,
+         "mplus_dungeons": 30, "mainspec": "Holy", "role": "raider"},
+    ]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+    assert 'mainspec      = "Holy"' in lua
+    assert 'role          = "raider"' in lua
+
+
+def test_build_lua_emits_role_defaults_to_raider():
+    rows = [
+        {"character": "Boble-Stormrage", "attendance": 95.0,
+         "mplus_dungeons": 30},
+    ]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+    assert 'role          = "raider"' in lua
+
+
+def test_build_lua_omits_mainspec_when_absent():
+    """Convert-mode rows without mainspec key do not emit a mainspec line."""
+    rows = [
+        {"character": "Boble-Stormrage", "attendance": 95.0, "mplus_dungeons": 30},
+    ]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+    assert "mainspec" not in lua
+
+
+def test_build_lua_trial_role_emitted():
+    rows = [
+        {"character": "NewGuy-Realm", "attendance": 60.0,
+         "mplus_dungeons": 5, "mainspec": "Frost", "role": "trial"},
+    ]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+    assert 'role          = "trial"' in lua
+
+
+def test_fetch_rows_spec_aware_uses_mainspec_sim(monkeypatch):
+    """With spec_aware=True, per-spec sim score is preferred over max."""
+
+    def fake_http(path, key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            return [{"id": 1, "name": "Boble", "realm": "Stormrage",
+                     "main_spec": "Holy", "status": "raider"}]
+        if "/attendance" in path:
+            return _fixture("attendance.json")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            return {
+                "characters": [{
+                    "id": 1,
+                    "instances": [{
+                        "difficulties": [{
+                            "wishlist": {
+                                "encounters": [{
+                                    "items": [{
+                                        "id": 212401,
+                                        "score_by_spec": {
+                                            "Holy":       {"percentage": 2.5},
+                                            "Protection": {"percentage": 8.0},
+                                        },
+                                        "wishes": [],
+                                    }]
+                                }]
+                            }
+                        }]
+                    }]
+                }]
+            }
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http)
+    monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, _, _ = wa.fetch_rows("key", None, spec_aware=True)
+    row = rows[0]
+    # Holy = 2.5, Protection = 8.0; spec_aware should pick Holy (2.5)
+    assert row.get("sim_212401") == 2.5
+
+
+def test_fetch_rows_no_spec_aware_uses_max(monkeypatch):
+    """With spec_aware=False, max across specs is used."""
+
+    def fake_http(path, key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            return [{"id": 1, "name": "Boble", "realm": "Stormrage",
+                     "main_spec": "Holy", "status": "raider"}]
+        if "/attendance" in path:
+            return _fixture("attendance.json")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            return {
+                "characters": [{
+                    "id": 1,
+                    "instances": [{
+                        "difficulties": [{
+                            "wishlist": {
+                                "encounters": [{
+                                    "items": [{
+                                        "id": 212401,
+                                        "score_by_spec": {
+                                            "Holy":       {"percentage": 2.5},
+                                            "Protection": {"percentage": 8.0},
+                                        },
+                                        "wishes": [],
+                                    }]
+                                }]
+                            }
+                        }]
+                    }]
+                }]
+            }
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http)
+    monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, _, _ = wa.fetch_rows("key", None, spec_aware=False)
+    row = rows[0]
+    # spec_aware=False: max across specs = 8.0
+    assert row.get("sim_212401") == 8.0
