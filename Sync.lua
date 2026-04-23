@@ -275,6 +275,16 @@ function Sync:SendRequest(addon, target, version)
 end
 
 function Sync:SendData(addon, target)
+    local peerPv      = self.peers and self.peers[target] and self.peers[target].pv
+    local effectivePv = peerPv and math.min(PROTO_VERSION, peerPv) or PROTO_VERSION
+
+    if effectivePv >= 3 then
+        -- Peer supports DATACHUNK; use chunked transfer.
+        self:SendDataChunked(addon, target)
+        return
+    end
+
+    -- Fallback: single-message DATA (proto <= 2 peer).
     local data = addon:GetData()
     if not data then return end
     local payload, adler = encodeData(data)
@@ -282,15 +292,56 @@ function Sync:SendData(addon, target)
         addon:Print("could not encode data (LibDeflate missing?)")
         return
     end
-    local peerPv = self.peers and self.peers[target] and self.peers[target].pv
-    local effectivePv = peerPv and math.min(PROTO_VERSION, peerPv) or PROTO_VERSION
     send(addon, self:_wrap({
         kind    = KIND_DATA,
         v       = getDataVersion(data),
         payload = payload,
         adler   = adler,   -- Adler32 of pre-compression serialized string
     }, effectivePv), "WHISPER", target)
-    addon:Print(string.format("sent dataset (%d chars) to %s", countChars(data), target))
+    addon:Print(string.format("sent dataset (%d chars) to %s [legacy DATA]",
+        countChars(data), target))
+end
+
+--- Send the current dataset to `target` as a sequence of DATACHUNK whispers.
+-- Called when the negotiated proto is 3 (peer.pv >= 3).
+-- Falls back gracefully on encoding failure or degenerate empty payload.
+function Sync:SendDataChunked(addon, target)
+    local data = addon:GetData()
+    if not data then return end
+
+    local payload, adler = encodeData(data)
+    if not payload then
+        addon:Print("could not encode data (LibDeflate missing?)")
+        return
+    end
+
+    local chunks = encodeChunks(payload)
+    local total  = #chunks
+
+    if total == 0 then
+        -- Degenerate: encoded payload was empty; abort rather than send zero chunks.
+        addon:Print("warning: encoded payload is empty; aborting send to " .. target)
+        return
+    end
+
+    local v = getDataVersion(data)
+
+    addon:Print(string.format(
+        "sending dataset to %s in %d chunk(s) (CHUNK_SIZE=%d, adler=%d)",
+        target, total, CHUNK_SIZE, adler))
+
+    for seq, chunk in ipairs(chunks) do
+        send(addon, self:_wrap({
+            kind  = KIND_DATACHUNK,
+            v     = v,
+            seq   = seq,
+            total = total,
+            chunk = chunk,
+            adler = adler,   -- same value in every envelope; verified after reassembly
+        }, 3), "WHISPER", target)
+        -- Note: AceComm queues messages internally; we do not sleep between sends.
+        -- AceComm's BULK priority plus the addon-channel rate limiter handle pacing.
+    end
 end
 
 function Sync:SendSettings(addon)
