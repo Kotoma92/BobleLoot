@@ -869,6 +869,46 @@ function BuildTuningTab(parent)
         "When two candidates' scores are within this many points, "
         .. "both cells show a ~ prefix. Set to 0 to disable.")
 
+    -- ── Score trend tracking (3.8) ────────────────────────────────────────
+    local trendCard, trendInner = MakeSection(body, "Score trend tracking")
+    trendCard:SetPoint("TOPLEFT",  dispCard, "BOTTOMLEFT",  0, -8)
+    trendCard:SetPoint("TOPRIGHT", dispCard, "BOTTOMRIGHT", 0, -8)
+    trendCard:SetHeight(100)
+
+    local trackTog = MakeToggle(trendInner, {
+        label   = "Track per-night score trends (leader only)",
+        x       = 4,
+        y       = -4,
+        get     = function() return (addon and addon.db.profile.trackTrends) ~= false end,
+        set     = function(v)
+            if addon then addon.db.profile.trackTrends = v and true or false end
+        end,
+    })
+
+    local trendHint = trendInner:CreateFontString(nil, "OVERLAY")
+    trendHint:SetFont(T.fontBody, T.sizeSmall)
+    trendHint:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    trendHint:SetPoint("TOPLEFT", trendInner, "TOPLEFT", 26, -22)
+    trendHint:SetWidth(480)
+    trendHint:SetText(
+        "When enabled, the leader's client records each player's computed score "
+        .. "after every voting session. Used to show score trends in tooltips and "
+        .. "the Explain panel after four or more weeks of data.")
+
+    local trendWindowSld = MakeSlider(trendInner, {
+        label  = "Trend window (days)",
+        x      = 4,
+        y      = -50,
+        min    = 7,
+        max    = 90,
+        step   = 1,
+        width  = 220,
+        get    = function() return (addon and addon.db.profile.trendHistoryDays) or 28 end,
+        set    = function(v)
+            if addon then addon.db.profile.trendHistoryDays = math.floor(v) end
+        end,
+    })
+
     -- Refresh state on tab show.
     body:SetScript("OnShow", function()
         if not addon then return end
@@ -881,6 +921,13 @@ function BuildTuningTab(parent)
             local ct = addon.db.profile.conflictThreshold or 5
             conflictSld:SetValue(ct)
             conflictSld._valLbl:SetText(tostring(ct))
+        end
+        -- 3.8: refresh trend controls.
+        if trackTog then
+            trackTog:SetChecked((addon.db.profile.trackTrends) ~= false)
+        end
+        if trendWindowSld then
+            trendWindowSld:SetValue(addon.db.profile.trendHistoryDays or 28)
         end
     end)
 end
