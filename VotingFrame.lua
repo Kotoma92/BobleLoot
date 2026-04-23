@@ -14,6 +14,12 @@ local _, ns = ...
 local VF = {}
 ns.VotingFrame = VF
 
+-- Ghost-weights preview state (3.10).
+-- When true, doCellUpdate uses VF._ghostWeights instead of db.profile.weights.
+VF.ghostMode     = false
+VF._ghostWeights = nil  -- populated from ghostPresets.farm (or activeGhostPreset)
+                         -- when the toggle button is pressed.
+
 local SCORE_COL = "blScore"
 
 -- Resolved after Scoring.lua loads; both modules are in the same TOC frame.
@@ -315,6 +321,31 @@ end
 -- Expose for LootFrame.lua's transparency tooltip.
 VF.formatRaw = formatRaw
 
+function VF.SetGhostMode(active)
+    -- 3B seam: if ns.Scoring.ComputeAll(itemID, altWeights) is available,
+    -- a single pre-pass could cache all ghost scores here and avoid the
+    -- per-cell weight swap. The current approach is correct; optimize in
+    -- a follow-up when 3B is merged.
+    VF.ghostMode = active
+    if active then
+        local addon = VF.addon
+        if addon and addon.db then
+            local gp     = addon.db.profile.ghostPresets
+            local preset = gp and gp[gp.activeGhostPreset or "farm"]
+            VF._ghostWeights = preset or (gp and gp.farm)
+        end
+    else
+        VF._ghostWeights = nil
+    end
+    -- Invalidate the session stats cache so scores recompute.
+    _sessionStats = {}
+    -- Force a refresh of the lib-st table.
+    local rcVoting = VF.rcVoting
+    if rcVoting and rcVoting.frame and rcVoting.frame.st then
+        pcall(function() rcVoting.frame.st:Refresh() end)
+    end
+end
+
 local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef,
                                  sessionMedian, sessionMax)
     local inDs = isInDataset(addon, name)
@@ -460,7 +491,17 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
     local simRef   = simReferenceFor(addon, itemID, names)
     local histRef  = historyReferenceFor(addon, names)
 
-    local score              = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
+    local score
+    if VF.ghostMode and VF._ghostWeights then
+        -- Ghost-weights path: temporarily substitute the alternate preset.
+        local profile = addon.db.profile
+        local savedW  = profile.weights
+        profile.weights = VF._ghostWeights
+        score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
+        profile.weights = savedW
+    else
+        score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
+    end
     local inDs               = isInDataset(addon, name)
     local median, max        = computeSessionStats(rcVoting, addon, session, data)
 
@@ -587,8 +628,20 @@ local function sortFn(table, rowa, rowb, sortbycol)
     local names  = bidderNames(rcVoting, session, table.data)
     local simRef = simReferenceFor(addon, itemID, names)
     local histRef = historyReferenceFor(addon, names)
-    local sa = computeScoreForRow(rcVoting, addon, session, a.name, simRef, histRef) or -1
-    local sb = computeScoreForRow(rcVoting, addon, session, b.name, simRef, histRef) or -1
+    local function ghostScore(rowName)
+        if VF.ghostMode and VF._ghostWeights then
+            local savedW = addon.db.profile.weights
+            addon.db.profile.weights = VF._ghostWeights
+            local s = computeScoreForRow(rcVoting, addon, session,
+                                          rowName, simRef, histRef) or -1
+            addon.db.profile.weights = savedW
+            return s
+        end
+        return computeScoreForRow(rcVoting, addon, session,
+                                   rowName, simRef, histRef) or -1
+    end
+    local sa = ghostScore(a.name)
+    local sb = ghostScore(b.name)
     local col = table.cols[sortbycol]
     local direction = col.sort or col.defaultsort or "dsc"
     if direction == "asc" then return sa < sb else return sa > sb end
