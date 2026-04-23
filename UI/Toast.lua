@@ -181,4 +181,10 @@ function Toast:Setup(addonArg)
         local msg = string.format("[BL] Dataset is %dh old — run wowaudit.py", hoursOld or 0)
         Toast:Show(msg, "warning")
     end)
+
+    -- Import result (roadmap 4.3 — DoImportPaste fires this).
+    -- Arguments: ok (boolean), message (string).
+    addon:RegisterMessage("BobleLoot_ImportResult", function(_, ok, msg)
+        Toast:Show(msg or "Import result unknown.", ok and "success" or "error")
+    end)
 end
