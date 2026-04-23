@@ -352,6 +352,31 @@ function BobleLoot:OnSlashCommand(input)
     elseif input == "lootdb" or input == "loothistory" then
         if ns.LootHistory then
             if ns.LootHistory.Diagnose then ns.LootHistory:Diagnose(self) end
+
+            -- Schema detection output.
+            local verdict = ns.LootHistory.lastVerdictForDiag
+                         or (ns.LootHistory.DetectSchemaVersion
+                             and ns.LootHistory:DetectSchemaVersion(nil, self))
+            if verdict then
+                local colour = (verdict.status == "ok")
+                    and "|cff19CC4D"   -- green
+                    or  (verdict.status == "degraded" and "|cffFFA600" or "|cffE63333")
+                self:Print(string.format(
+                    "RC schema status: %s%s|r  (check #%d, RC v%s, at %s)",
+                    colour,
+                    verdict.status,
+                    verdict.version,
+                    verdict.rcVersion,
+                    date("%H:%M:%S", verdict.checkedAt)))
+                self:Print("  Source: " .. (verdict.sourceUsed or "?"))
+                if #verdict.missingFields > 0 then
+                    self:Print("  Missing field groups: "
+                        .. table.concat(verdict.missingFields, "; "))
+                else
+                    self:Print("  All expected field groups present.")
+                end
+            end
+
             ns.LootHistory:Apply(self)
             local lh = ns.LootHistory
             self:Print(string.format("Re-applied loot history. matched=%d scanned=%d source=%s",
