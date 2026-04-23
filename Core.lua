@@ -101,6 +101,7 @@ local DB_DEFAULTS = {
         -- RC Note field integration (item 4.9).
         writeRCNote = true,
         conflictThreshold = 5,   -- 2.10: ~prefix when top-two gap <= this
+        colorMode = "default",          -- 4.11: "default"|"deuter"|"highcontrast"
         suppressTransparencyLabel = false,  -- 2.11: player hides BL label even when leader enables transparency
         -- 4.2: Catalyst / tier-token synthetic loot tracking.
         synthWeight  = 0.75,  -- weight relative to a normal RC drop (1.0). Configurable.
