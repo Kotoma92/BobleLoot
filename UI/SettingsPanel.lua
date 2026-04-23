@@ -1300,6 +1300,32 @@ function BuildDataTab(parent)
         end, { width = 190, height = 22, x = 162, y = -4 })
     teamBtn:Hide()  -- shown conditionally in OnShow
 
+    -- ── RC integration card (item 4.8 + 4.9) ─────────────────────────
+    -- Always visible. Shows the detected RC version (green/yellow/red) and
+    -- the "Write score into RC Note field" toggle.
+    local rcCard, rcInner = MakeSection(body, "RC Integration")
+    rcCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 242)
+    rcCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 126)
+
+    -- RC version info line (item 4.8). Refreshed in OnShow.
+    local rcVersionLine = rcInner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    rcVersionLine:SetPoint("TOPLEFT", rcInner, "TOPLEFT", 4, -4)
+    rcVersionLine:SetWidth(480)
+    rcVersionLine:SetJustifyH("LEFT")
+    rcVersionLine:SetWordWrap(false)
+
+    -- "Write score into RC Note field" toggle (item 4.9).
+    local noteToggle = MakeToggle(rcInner, {
+        label   = "Write score into RC Note field",
+        x = 4, y = -24,
+        get = function()
+            return addon and addon.db.profile.writeRCNote ~= false
+        end,
+        set = function(v)
+            if addon then addon.db.profile.writeRCNote = v and true or false end
+        end,
+    })
+
     -- ── Transparency card ─────────────────────────────────────────────
     local transCard, transInner = MakeSection(body, "Transparency mode")
     transCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 124)
@@ -1396,6 +1422,39 @@ function BuildDataTab(parent)
         if suppressTog then
             suppressTog:SetChecked(
                 (addon and addon.db.profile.suppressTransparencyLabel) or false)
+        end
+
+        -- RC version info line (item 4.8). Refresh on every tab-show so it
+        -- reflects post-load state (Detect() may have run after BuildDataTab).
+        if not ns.RCCompat then
+            rcVersionLine:SetText("|cffff5555RCCompat module not loaded.|r")
+        else
+            local detected, resolverName, _, matchType = ns.RCCompat:GetStatus()
+            local testedList = {}
+            for v in pairs(ns.RCCompat.TESTED_VERSIONS) do
+                testedList[#testedList + 1] = "v" .. v .. ".x"
+            end
+            table.sort(testedList)
+            local testedStr = table.concat(testedList, ", ")
+
+            local colorCode
+            if matchType == "tested" then
+                colorCode = "|cff40ff40"      -- green: version is in TESTED_VERSIONS
+            elseif matchType == "untested-major" then
+                colorCode = "|cffffd040"      -- yellow: newer than tested
+            else
+                colorCode = "|cffff5050"      -- red: unknown / fallback
+            end
+
+            rcVersionLine:SetText(string.format(
+                "%sTested on RC %s, detected %s (resolver: %s)|r",
+                colorCode, testedStr, detected, resolverName))
+        end
+
+        -- Note toggle: reflect current profile value (may have changed externally).
+        if noteToggle then
+            noteToggle:SetChecked(
+                addon and addon.db.profile.writeRCNote ~= false or false)
         end
     end)
 end
