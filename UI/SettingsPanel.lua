@@ -712,12 +712,12 @@ function BuildTuningTab(parent)
     local card, inner = MakeSection(body, "Scoring tuning")
     card:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
     card:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6)
-    -- Fixed height: deepest control (loot history slider) sits at y=-220
-    -- inside inner; add inner offset (22) + slider height (30) + padding (18).
-    card:SetHeight(290)
+    -- Fixed height: deepest control (synth weight slider, roadmap 4.2) sits
+    -- at y=-446 inside inner; add inner offset (22) + slider height (30) + padding (18).
+    card:SetHeight(500)
 
     -- Track control references for conditional show/hide.
-    local simCapSld, mplusCapSld, histCapSld
+    local simCapSld, mplusCapSld, histCapSld, synthWeightSld
 
     -- Partial-BiS slider.
     MakeSlider(inner, {
@@ -824,6 +824,34 @@ function BuildTuningTab(parent)
             end,
         })
     end
+
+    -- Synthetic history weight slider (roadmap 4.2).
+    -- Allows tuning how much catalyst/tier-token entries count relative to
+    -- a normal RC boss-drop (1.0 = equal weight, 0.75 = default, 0 = exclude).
+    local synthLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    synthLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -428)
+    synthLabel:SetText("Synthetic history (catalyst/token) weight")
+    synthLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+
+    local synthWeightSld = MakeSlider(inner, {
+        label   = "Synth weight",
+        min     = 0,
+        max     = 2.0,
+        step    = 0.05,
+        isPercent = false,
+        width   = 220,
+        x       = 4,
+        y       = -446,
+        get = function()
+            return (addon and addon.db.profile.synthWeight) or 0.75
+        end,
+        set = function(v)
+            if addon then
+                addon.db.profile.synthWeight = v
+                ScheduleLootHistoryApply()
+            end
+        end,
+    })
 
     -- ── Display section (2.10) ────────────────────────────────────────
     local dispCard, dispInner = MakeSection(body, "Display")
@@ -1211,7 +1239,7 @@ function BuildDataTab(parent)
 
     -- ── Actions card ──────────────────────────────────────────────────
     local actCard, actInner = MakeSection(body, "Actions")
-    actCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6,  234)
+    actCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6,  264)
     actCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 130)
 
     -- Broadcast button.
@@ -1222,6 +1250,24 @@ function BuildDataTab(parent)
                 addon:Print("announced dataset to raid.")
             end
         end, { width = 150, height = 22, x = 4, y = -4 })
+
+    -- Import dataset button (roadmap 4.3).
+    -- Opens the /bl importpaste StaticPopup paste dialog.
+    local importBtn = MakeButton(actInner, "Import Dataset (Paste JSON)",
+        function()
+            StaticPopup_Show("BOBLELOOT_IMPORT_PASTE")
+        end, { width = 200, height = 22, x = 4, y = -34 })
+
+    importBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Import Dataset from JSON", 1, 1, 1)
+        GameTooltip:AddLine(
+            "Run wowaudit.py --export bundle.json on any machine, "
+            .. "copy the file contents, and paste here. No API key required.",
+            0.8, 0.8, 0.8, true)
+        GameTooltip:Show()
+    end)
+    importBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- WoWAudit team page button (hidden if teamUrl absent).
     local teamBtn = MakeButton(actInner, "Open WoWAudit team page",
