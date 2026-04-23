@@ -592,6 +592,8 @@ function BuildWeightsTab(parent)
                         end
                     end
                 end
+                -- Show/hide the all-disabled notice.
+                updateAllDisabledLbl()
             end,
         })
 
@@ -619,6 +621,8 @@ function BuildWeightsTab(parent)
                         end
                     end
                 end
+                -- Show/hide the all-disabled notice.
+                updateAllDisabledLbl()
             end,
         })
 
@@ -659,6 +663,23 @@ function BuildWeightsTab(parent)
     exDetailLbl:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
     exDetailLbl:SetPoint("TOPLEFT", exScoreLbl, "BOTTOMLEFT", 0, -2)
     exDetailLbl:SetWidth(500)
+
+    -- All-components-disabled notice (shown only when countEnabled == 0).
+    local allDisabledLbl = exInner:CreateFontString(nil, "OVERLAY")
+    allDisabledLbl:SetFont(T.fontBody, T.sizeSmall)
+    allDisabledLbl:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    allDisabledLbl:SetText("All components disabled \xe2\x80\x94 enable at least one.")
+    allDisabledLbl:SetPoint("TOPLEFT", exDetailLbl, "BOTTOMLEFT", 0, -4)
+    allDisabledLbl:Hide()
+
+    local function updateAllDisabledLbl()
+        if not addon then return end
+        if countEnabled(addon.db.profile.weightsEnabled) == 0 then
+            allDisabledLbl:Show()
+        else
+            allDisabledLbl:Hide()
+        end
+    end
 
     local function refreshExampleRow()
         if not addon then return end
@@ -707,6 +728,7 @@ function BuildWeightsTab(parent)
             end
         end
         refreshExampleRow()
+        updateAllDisabledLbl()
     end)
 end
 
