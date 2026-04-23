@@ -78,6 +78,7 @@ local DB_DEFAULTS = {
         suppressTransparencyLabel = false,  -- 2.11: player hides BL label even when leader enables transparency
         minimap  = { hide = false, minimapPos = 220 },
         panelPos = { point = "CENTER", x = 0, y = 0 },
+        historyViewerPos = { point = "CENTER", x = 0, y = 0 },
         comparePos = { point = "CENTER", x = 0, y = 80 },
         ghostPresets = {
             -- "prog" mirrors the user's live weights at first load.
@@ -145,6 +146,12 @@ function BobleLoot:OnEnable()
     end
     if ns.MinimapButton and ns.MinimapButton.Setup then
         ns.MinimapButton:Setup(self)
+    end
+    if ns.Toast and ns.Toast.Setup then
+        ns.Toast:Setup(self)
+    end
+    if ns.HistoryViewer and ns.HistoryViewer.Setup then
+        ns.HistoryViewer:Setup(self)
     end
     -- Great Vault collection tracking (Batch 2.4).
     if C_WeeklyRewards then
