@@ -710,8 +710,11 @@ function BuildTuningTab(parent)
     tabBodies["tuning"] = body
 
     local card, inner = MakeSection(body, "Scoring tuning")
-    card:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
-    card:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 6)
+    card:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
+    card:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6)
+    -- Fixed height: deepest control (loot history slider) sits at y=-220
+    -- inside inner; add inner offset (22) + slider height (30) + padding (18).
+    card:SetHeight(290)
 
     -- Track control references for conditional show/hide.
     local simCapSld, mplusCapSld, histCapSld
@@ -796,7 +799,7 @@ function BuildTuningTab(parent)
     local roleLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     roleLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -270)
     roleLabel:SetText("Role history multipliers  (1.0 = full, 0.5 = half, 0.0 = none)")
-    roleLabel:SetTextColor(T.c.muted.r, T.c.muted.g, T.c.muted.b)
+    roleLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
 
     local ROLE_ROWS = {
         { key = "raider", label = "Raider",  y = -286 },
@@ -822,13 +825,63 @@ function BuildTuningTab(parent)
         })
     end
 
+    -- ── Display section (2.10) ────────────────────────────────────────
+    local dispCard, dispInner = MakeSection(body, "Display")
+    dispCard:SetPoint("TOPLEFT",  card, "BOTTOMLEFT",  0, -8)
+    dispCard:SetPoint("TOPRIGHT", card, "BOTTOMRIGHT", 0, -8)
+    dispCard:SetHeight(80)
+
+    -- Conflict threshold slider (integer 0-20).
+    local conflictSld = MakeSlider(dispInner, {
+        label = "Conflict threshold (points)",
+        min   = 0,
+        max   = 20,
+        step  = 1,
+        isPercent = false,
+        width = 280,
+        x = 4, y = -4,
+        get = function()
+            return (addon and addon.db.profile.conflictThreshold) or 5
+        end,
+        set = function(v)
+            if addon then
+                addon.db.profile.conflictThreshold = math.floor(v)
+            end
+        end,
+    })
+
+    -- Override MakeSlider's default "%.1f" readout with a clean integer.
+    conflictSld:SetScript("OnValueChanged", function(self, v)
+        v = math.floor(v + 0.5)
+        if addon then addon.db.profile.conflictThreshold = v end
+        conflictSld._valLbl:SetText(tostring(v))
+    end)
+    conflictSld._valLbl:SetText(
+        tostring((addon and addon.db.profile.conflictThreshold) or 5))
+
+    -- Hint text below the slider.
+    local conflictHint = dispInner:CreateFontString(nil, "OVERLAY")
+    conflictHint:SetFont(T.fontBody, T.sizeSmall)
+    conflictHint:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    conflictHint:SetPoint("TOPLEFT", conflictSld, "BOTTOMLEFT", 0, -4)
+    conflictHint:SetWidth(480)
+    conflictHint:SetText(
+        "When two candidates' scores are within this many points, "
+        .. "both cells show a ~ prefix. Set to 0 to disable.")
+
     -- Refresh state on tab show.
     body:SetScript("OnShow", function()
         if not addon then return end
         local oc = addon.db.profile.overrideCaps
-        if simCapSld  then simCapSld:SetEnabled(oc)  end
+        if simCapSld   then simCapSld:SetEnabled(oc)   end
         if mplusCapSld then mplusCapSld:SetEnabled(oc) end
         if histCapSld  then histCapSld:SetEnabled(oc)  end
+        -- 2.10: refresh conflict threshold display.
+        if conflictSld then
+            local ct = addon.db.profile.conflictThreshold or 5
+            conflictSld:SetValue(ct)
+            conflictSld._valLbl:SetText(tostring(ct))
+        end
     end)
 end
 
@@ -886,7 +939,7 @@ function BuildLootDBTab(parent)
     local vaultLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     vaultLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -192)
     vaultLabel:SetText("Vault selections & BOE awards")
-    vaultLabel:SetTextColor(T.c.muted.r, T.c.muted.g, T.c.muted.b)
+    vaultLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
 
     MakeSlider(inner, {
         label = "Vault / BOE weight",
@@ -1056,6 +1109,32 @@ function BuildDataTab(parent)
         end,
     })
 
+    -- 2.11: player-side opt-out — always editable regardless of leadership.
+    local suppressTog = MakeToggle(transInner, {
+        label = "Hide score label on my screen (overrides leader setting)",
+        x = 4, y = -58,
+        get = function()
+            return (addon and addon.db.profile.suppressTransparencyLabel) or false
+        end,
+        set = function(v)
+            if not addon then return end
+            addon.db.profile.suppressTransparencyLabel = v and true or false
+            -- Immediately re-render the loot frame if it is open.
+            if ns.LootFrame and ns.LootFrame.Refresh then
+                ns.LootFrame:Refresh()
+            end
+        end,
+    })
+
+    local suppressHint = transInner:CreateFontString(nil, "OVERLAY")
+    suppressHint:SetFont(T.fontBody, T.sizeSmall)
+    suppressHint:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    suppressHint:SetPoint("TOPLEFT", transInner, "TOPLEFT", 26, -76)
+    suppressHint:SetWidth(480)
+    suppressHint:SetText(
+        "Your choice. Does not affect what the leader or other raiders see. "
+        .. "Saved per character.")
+
     -- OnShow re-reads leader state (leadership can change while panel is open).
     body:SetScript("OnShow", function()
         updateInfoLabel()
@@ -1078,6 +1157,12 @@ function BuildDataTab(parent)
             transHintLbl:SetText(
                 "Only the raid/group leader can change this. Current state is synced "
                 .. "from the leader automatically.")
+        end
+
+        -- 2.11: always refresh suppress toggle from profile (per-character).
+        if suppressTog then
+            suppressTog:SetChecked(
+                (addon and addon.db.profile.suppressTransparencyLabel) or false)
         end
     end)
 end
