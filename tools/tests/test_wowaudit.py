@@ -1490,3 +1490,91 @@ def test_http_get_json_uses_backoff_on_rate_limit(monkeypatch):
     result = wa.http_get_json("/test-endpoint", "fake-key")
     assert isinstance(result, dict)
     assert len(call_log) == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 4A-3 — character rename sidecar (item 4.5)
+# ---------------------------------------------------------------------------
+
+RENAMES_FIXTURE = {
+    "OldChar-OldRealm": "NewChar-NewRealm",
+    "Migrant-TwistingNether": "Migrant-Stormrage",
+}
+
+
+def test_apply_renames_renames_character_key():
+    """Row character keys matching old names are replaced with new names."""
+    rows = [
+        {"character": "OldChar-OldRealm", "attendance": 100.0},
+        {"character": "Stable-Realm", "attendance": 80.0},
+    ]
+    result = wa._apply_renames(rows, bis={}, renames=RENAMES_FIXTURE)
+    names = [r["character"] for r in result["rows"]]
+    assert "NewChar-NewRealm" in names
+    assert "OldChar-OldRealm" not in names
+    assert "Stable-Realm" in names
+
+
+def test_apply_renames_renames_bis_keys():
+    """BiS dict keys matching old names are replaced."""
+    bis = {
+        "OldChar-OldRealm": [212401, 212405],
+        "Stable-Realm": [212410],
+    }
+    result = wa._apply_renames([], bis=bis, renames=RENAMES_FIXTURE)
+    assert "NewChar-NewRealm" in result["bis"]
+    assert "OldChar-OldRealm" not in result["bis"]
+    assert result["bis"]["NewChar-NewRealm"] == [212401, 212405]
+
+
+def test_apply_renames_skips_metadata_keys():
+    """Keys starting with underscore are treated as metadata, not renames."""
+    renames_with_meta = {
+        "_comment": "this is metadata",
+        "OldChar-OldRealm": "NewChar-NewRealm",
+    }
+    rows = [{"character": "OldChar-OldRealm", "attendance": 95.0}]
+    result = wa._apply_renames(rows, bis={}, renames=renames_with_meta)
+    assert result["rows"][0]["character"] == "NewChar-NewRealm"
+
+
+def test_apply_renames_empty_renames_is_noop():
+    """An empty renames map leaves rows and bis unchanged."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 100.0}]
+    bis = {"Boble-Stormrage": [212401]}
+    result = wa._apply_renames(rows, bis=bis, renames={})
+    assert result["rows"][0]["character"] == "Boble-Stormrage"
+    assert "Boble-Stormrage" in result["bis"]
+
+
+def test_apply_renames_no_match_is_noop():
+    """Names that do not appear in renames are unchanged."""
+    rows = [{"character": "Unknown-Realm", "attendance": 90.0}]
+    result = wa._apply_renames(rows, bis={}, renames=RENAMES_FIXTURE)
+    assert result["rows"][0]["character"] == "Unknown-Realm"
+
+
+def test_build_lua_emits_renames_table(monkeypatch):
+    """build_lua with a non-empty renames map writes a renames = {} table."""
+    rows = [{"character": "NewChar-NewRealm", "attendance": 95.0,
+             "mplus_dungeons": 10}]
+    renames = {"OldChar-OldRealm": "NewChar-NewRealm"}
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+                       renames=renames)
+    assert "renames" in lua
+    assert "OldChar-OldRealm" in lua
+    assert "NewChar-NewRealm" in lua
+
+
+def test_build_lua_omits_renames_table_when_empty():
+    """build_lua with no renames does not write a renames table."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0,
+             "mplus_dungeons": 10}]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+                       renames={})
+    assert "renames" not in lua
+
+
+def test_renames_json_file_exists():
+    """tools/renames.json is present on disk."""
+    assert (TOOLS_DIR / "renames.json").is_file()

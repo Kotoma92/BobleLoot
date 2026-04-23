@@ -244,6 +244,54 @@ def _load_tier_config(tier_name: str) -> dict:
 
 
 # --------------------------------------------------------------------------
+# Character rename / realm transfer (item 4.5)
+# --------------------------------------------------------------------------
+
+def _apply_renames(
+    rows: list[dict],
+    bis: dict[str, list[int]],
+    renames: dict[str, str],
+) -> dict:
+    """Apply a character-rename map to rows and BiS keys.
+
+    Args:
+        rows: Per-character row dicts. ``row["character"]`` is updated
+            in-place for any matching old name.
+        bis: BiS mapping ``{ "Name-Realm": [itemIDs] }``. Any key that
+            appears as an old name in ``renames`` is replaced.
+        renames: Mapping ``{ "Old-Realm": "New-Realm" }``. Keys starting
+            with ``_`` are treated as metadata and ignored.
+
+    Returns:
+        Dict with keys ``"rows"`` (list[dict]) and ``"bis"`` (dict),
+        both with renames applied.
+    """
+    # Filter out metadata keys (e.g. _comment, _example).
+    effective: dict[str, str] = {
+        old: new
+        for old, new in renames.items()
+        if not old.startswith("_") and isinstance(new, str)
+    }
+
+    if not effective:
+        return {"rows": rows, "bis": bis}
+
+    # Rename row character keys.
+    for row in rows:
+        old_name = row.get("character", "")
+        if old_name in effective:
+            row["character"] = effective[old_name]
+
+    # Rename BiS keys.
+    new_bis: dict[str, list[int]] = {}
+    for key, item_ids in bis.items():
+        new_key = effective.get(key, key)
+        new_bis[new_key] = item_ids
+
+    return {"rows": rows, "bis": new_bis}
+
+
+# --------------------------------------------------------------------------
 # BiS derivation from wishlist sim scores
 # --------------------------------------------------------------------------
 
@@ -484,6 +532,8 @@ def build_lua(
     history_days: int | None = None,
     tier_name: str | None = None,
     missing_wishlists: list[str] | None = None,
+    renames: dict[str, str] | None = None,
+    score_overrides: dict[int, float] | None = None,
 ) -> str:
     """Render BobleLoot_Data.lua from assembled rows.
 
@@ -503,6 +553,12 @@ def build_lua(
         missing_wishlists: Optional list of "Name-Realm" strings for characters
             present in the roster but absent from the /wishlists payload.
             Emitted as a ``missingWishlists`` array for the Lua side to surface.
+        renames: Optional mapping ``{ "Old-Realm": "New-Realm" }`` emitted as
+            a ``renames`` table for ``LootHistory:Apply`` to resolve stale keys
+            (item 4.5). Keys starting with ``_`` are metadata and ignored.
+        score_overrides: Optional mapping ``{ itemID: float }`` emitted as a
+            ``scoreOverrides`` table for ``Scoring:Compute`` early-return
+            (item 4.7). Non-numeric values are skipped silently.
 
     Returns:
         The Lua file contents as a string.
@@ -564,6 +620,37 @@ def build_lua(
     if missing_wishlists:
         escaped_names = ", ".join(f'"{_lua_escape(n)}"' for n in missing_wishlists)
         out.append(f"    missingWishlists = {{ {escaped_names} }},")
+
+    # Emit scoreOverrides table (item 4.7).
+    # TODO(4B): include scoreOverrides in export bundle.
+    effective_overrides: dict[int, float] = {}
+    for raw_id, raw_val in (score_overrides or {}).items():
+        try:
+            iid = int(raw_id)
+            fval = float(raw_val)
+            effective_overrides[iid] = fval
+        except (ValueError, TypeError):
+            pass  # skip non-numeric entries silently
+
+    if effective_overrides:
+        out.append("    scoreOverrides = {")
+        for item_id, score_val in sorted(effective_overrides.items()):
+            out.append(f"        [{item_id}] = {score_val:.1f},")
+        out.append("    },")
+
+    # Emit renames table for LootHistory:Apply (item 4.5).
+    effective_renames = {
+        k: v for k, v in (renames or {}).items()
+        if not k.startswith("_") and isinstance(v, str)
+    }
+    if effective_renames:
+        out.append("    renames = {")
+        for old_name, new_name in sorted(effective_renames.items()):
+            out.append(
+                f'        ["{_lua_escape(old_name)}"] = '
+                f'"{_lua_escape(new_name)}",'
+            )
+        out.append("    },")
 
     out.append("    characters  = {")
 
@@ -1285,6 +1372,46 @@ def main():
         # Only override the default (5) if the user didn't explicitly set it.
         history_cap = int(soft_floor_override)
 
+    # Load rename sidecar (item 4.5).
+    renames_path = Path(__file__).resolve().parent / "renames.json"
+    renames: dict[str, str] = {}
+    if renames_path.is_file():
+        try:
+            raw_renames = json.loads(renames_path.read_text(encoding="utf-8"))
+            renames = {
+                k: v for k, v in raw_renames.items()
+                if isinstance(k, str) and isinstance(v, str)
+                and not k.startswith("_")
+            }
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"[WARN] Failed to load tools/renames.json: {exc}", file=sys.stderr)
+
+    # Apply renames to rows and BiS keys before emission.
+    renamed = _apply_renames(rows, bis, renames)
+    rows = renamed["rows"]
+    bis  = renamed["bis"]
+
+    # Load score-overrides sidecar (item 4.7).
+    overrides_path = Path(__file__).resolve().parent / "score-overrides.json"
+    score_overrides: dict[int, float] = {}
+    if overrides_path.is_file():
+        try:
+            raw_overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
+            for k, v in raw_overrides.items():
+                if k.startswith("_"):
+                    continue
+                try:
+                    score_overrides[int(k)] = float(v)
+                except (ValueError, TypeError):
+                    print(
+                        f"[WARN] score-overrides.json: skipping invalid entry "
+                        f"{k!r}={v!r}",
+                        file=sys.stderr,
+                    )
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"[WARN] Failed to load tools/score-overrides.json: {exc}",
+                  file=sys.stderr)
+
     try:
         lua = build_lua(
             rows, bis, args.sim_cap, mplus_cap, history_cap,
@@ -1293,6 +1420,8 @@ def main():
             history_days=history_days_override,
             tier_name=args.tier,
             missing_wishlists=missing_wishlists if not args.wowaudit else None,
+            renames=renames,
+            score_overrides=score_overrides,
         )
     except ValueError as exc:
         sys.exit(str(exc))
