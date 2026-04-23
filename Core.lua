@@ -98,6 +98,8 @@ local DB_DEFAULTS = {
         simCap       = 5.0,
         mplusCap     = 40,   -- M+ dungeons completed this season -> 1.0
         historyCap   = 5,
+        -- RC Note field integration (item 4.9).
+        writeRCNote = true,
         conflictThreshold = 5,   -- 2.10: ~prefix when top-two gap <= this
         suppressTransparencyLabel = false,  -- 2.11: player hides BL label even when leader enables transparency
         -- 4.2: Catalyst / tier-token synthetic loot tracking.
@@ -313,6 +315,16 @@ function BobleLoot:TryHookRC()
         return LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
     end)
     if not ok or not RC then return false end
+
+    -- Initialise the version-compat resolver before any frame hooks run.
+    -- Pass the schema-drift verdict from Batch 3C (nil if 3C not yet shipped).
+    if ns.RCCompat and ns.RCCompat.Detect then
+        local schemaVerdict = self.db and self.db.profile
+            and self.db.profile.rcSchemaDetected
+            and self.db.profile.rcSchemaDetected.status or nil
+        ns.RCCompat:Detect(RC, schemaVerdict)
+    end
+
     local hookedAny = false
     if ns.VotingFrame and ns.VotingFrame.Hook then
         if ns.VotingFrame:Hook(self, RC) then hookedAny = true end
@@ -737,8 +749,17 @@ function BobleLoot:OnSlashCommand(input)
     elseif input == "wastedloot clear" or input == "wasteloot clear" then
         self.db.profile.wastedLootMap = {}
         self:Print("Wasted-loot map cleared.")
+    elseif input == "rcversion" then
+        if ns.RCCompat then
+            local detected, resolverName, reason, matchType = ns.RCCompat:GetStatus()
+            self:Print(string.format(
+                "RC detected version: %s | resolver: %s | match: %s | reason: %s",
+                detected, resolverName, matchType, reason))
+        else
+            self:Print("RCCompat module not loaded.")
+        end
     else
-        self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | " ..
+        self:Print("Commands: /bl config | /bl minimap | /bl version | /bl rcversion | /bl broadcast | " ..
             "/bl transparency on|off | /bl conflict <0-20> | /bl checkdata | /bl lootdb | " ..
             "/bl synthhistory | /bl importpaste | " ..
             "/bl history | /bl benchscore [itemID] | " ..
