@@ -717,3 +717,48 @@ def test_read_table_sample_input():
     rows = wa._read_table(csv_path)
     assert len(rows) == 3
     assert rows[0]["character"] == "Sampletank-Stormrage"
+
+
+# ---------------------------------------------------------------------------
+# Task 2A-1 — _mainspec_sim_score
+# ---------------------------------------------------------------------------
+
+def test_mainspec_sim_score_exact_match():
+    item = {
+        "score_by_spec": {
+            "Holy": {"percentage": 3.5},
+            "Protection": {"percentage": 1.2},
+        }
+    }
+    assert wa._mainspec_sim_score(item, "Holy") == 3.5
+
+
+def test_mainspec_sim_score_case_insensitive():
+    item = {"score_by_spec": {"Holy": {"percentage": 2.7}}}
+    assert wa._mainspec_sim_score(item, "holy") == 2.7
+
+
+def test_mainspec_sim_score_no_match_returns_none():
+    item = {"score_by_spec": {"Fire": {"percentage": 4.0}}}
+    assert wa._mainspec_sim_score(item, "Frost") is None
+
+
+def test_mainspec_sim_score_none_mainspec_returns_none():
+    item = {"score_by_spec": {"Fire": {"percentage": 4.0}}}
+    assert wa._mainspec_sim_score(item, None) is None
+
+
+def test_mainspec_sim_score_empty_item_returns_none():
+    assert wa._mainspec_sim_score({}, "Holy") is None
+
+
+def test_mainspec_sim_score_negative_allowed():
+    """Negative (downgrade) values are returned as-is; caller decides what to do."""
+    item = {"score_by_spec": {"Frost": {"percentage": -1.0}}}
+    assert wa._mainspec_sim_score(item, "Frost") == -1.0
+
+
+def test_mainspec_sim_score_prefix_match():
+    """'Holy Paladin' as key is matched by mainspec='Holy'."""
+    item = {"score_by_spec": {"Holy Paladin": {"percentage": 5.5}}}
+    assert wa._mainspec_sim_score(item, "Holy") == 5.5

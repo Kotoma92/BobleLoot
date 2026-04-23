@@ -382,6 +382,38 @@ def _best_wishlist_score(item: dict) -> float:
     return float(best)
 
 
+def _mainspec_sim_score(item: dict, mainspec: str | None) -> float | None:
+    """Return the sim percentage for the character's main spec only.
+
+    Args:
+        item: A wishlist item dict as returned by the WoWAudit API.
+        mainspec: The spec name to match, e.g. ``"Holy"`` or ``"Protection"``.
+            Case-insensitive prefix match is used so ``"holy"`` matches
+            ``"Holy Paladin"`` if wowaudit ever returns a combined label.
+
+    Returns:
+        The percentage float for the matching spec, or ``None`` when the
+        spec is not found in ``score_by_spec``.  Returns ``None`` (not 0.0)
+        so callers can fall back to ``_best_wishlist_score`` rather than
+        silently scoring zero.
+    """
+    if not mainspec:
+        return None
+    sbs = item.get("score_by_spec")
+    if not isinstance(sbs, dict):
+        return None
+    target = mainspec.lower()
+    for spec_key, spec_data in sbs.items():
+        if not isinstance(spec_key, str):
+            continue
+        if spec_key.lower().startswith(target) or target.startswith(spec_key.lower()):
+            if isinstance(spec_data, dict):
+                p = spec_data.get("percentage")
+                if isinstance(p, (int, float)):
+                    return float(p)
+    return None
+
+
 def fetch_rows(
     api_key: str,
     dump_dir: Path | None,
