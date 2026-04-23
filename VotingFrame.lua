@@ -22,6 +22,10 @@ VF._ghostWeights = nil  -- populated from ghostPresets.farm (or activeGhostPrese
 
 local SCORE_COL = "blScore"
 
+-- Tracks which sessions have had Notes written this instance so we
+-- write once per session, not on every scroll update.
+local _noteWrittenForSession = {}
+
 -- Resolved after Scoring.lua loads; both modules are in the same TOC frame.
 local DEFAULT_COMPONENT_ORDER = { "sim", "bis", "history", "attendance", "mplus" }
 local function getComponentOrder()
@@ -652,6 +656,45 @@ local function sortFn(table, rowa, rowb, sortbycol)
     if direction == "asc" then return sa < sb else return sa > sb end
 end
 
+-- Writes BobleLoot scores into blank RC candidate Note fields for the
+-- given session. Called once per session on frame open. Skips candidates
+-- whose Note is already non-empty (human-typed notes must not be clobbered).
+local function writeNotesForSession(rcVoting, addon, session)
+    local resolver = VF.resolver
+    if not resolver or not resolver.writeCandidateNote then return end
+    local profile = addon.db and addon.db.profile
+    if not profile or not profile.writeRCNote then return end
+
+    local itemID = getItemIDForSession(rcVoting, session)
+    if not itemID then return end
+
+    -- Walk the scroll-table data to find all candidate rows.
+    local st = rcVoting.frame and rcVoting.frame.st
+    local tableData = st and st.data
+    if not tableData then return end
+
+    local names = {}
+    for _, row in ipairs(tableData) do
+        if row.name then names[#names + 1] = row.name end
+    end
+
+    -- Compute sim/history references once for the whole session.
+    local simRef  = simReferenceFor(addon, itemID, names)
+    local histRef = historyReferenceFor(addon, names)
+
+    for _, row in ipairs(tableData) do
+        if row.name then
+            local score = computeScoreForRow(rcVoting, addon, session,
+                                             row.name, simRef, histRef)
+            if score then
+                local text = string.format("BL=%d", math.floor(score + 0.5))
+                -- writeCandidateNote is a no-op if row.note is non-empty.
+                resolver.writeCandidateNote(row, text)
+            end
+        end
+    end
+end
+
 function VF:Hook(addon, RC)
     if self.hooked then return true end
     local rcVoting = RC:GetModule("RCVotingFrame", true)
@@ -859,6 +902,36 @@ function VF:Hook(addon, RC)
                     VF._updateGhostButtonState()
                 end
             end
+        end)
+    end
+
+    -- Hook the frame-open method to write Notes once per session.
+    -- RC v3.x uses "Open"; v2.x may use "StartSession". Try both.
+    -- If neither exists, fall back to UpdateScrollTable (write lands on
+    -- the second render pass due to the C_Timer.After(0) defer).
+    local function onSessionOpen(_, session)
+        session = session or (rcVoting.GetCurrentSession and rcVoting:GetCurrentSession())
+                             or rcVoting.session
+        if not session then return end
+        if _noteWrittenForSession[session] then return end
+        _noteWrittenForSession[session] = true
+        -- Defer by one frame so RC has populated the scroll table first.
+        C_Timer.After(0, function()
+            writeNotesForSession(rcVoting, addon, session)
+        end)
+    end
+
+    for _, methodName in ipairs({ "Open", "StartSession", "UpdateScrollTable" }) do
+        if type(rcVoting[methodName]) == "function" then
+            hooksecurefunc(rcVoting, methodName, onSessionOpen)
+            break  -- hook only the first one found
+        end
+    end
+
+    -- Reset per-session tracking when the voting frame closes.
+    if type(rcVoting.CloseFrame) == "function" then
+        hooksecurefunc(rcVoting, "CloseFrame", function()
+            _noteWrittenForSession = {}
         end)
     end
 
