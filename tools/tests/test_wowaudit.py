@@ -1655,3 +1655,131 @@ def test_renames_path_default_is_sibling_of_wowaudit():
 def test_score_overrides_path_default_is_sibling():
     """Default score-overrides path is tools/score-overrides.json."""
     assert (TOOLS_DIR / "score-overrides.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Batch 4B — export_bundle() round-trip tests (roadmap 4.3)
+# ---------------------------------------------------------------------------
+
+SAMPLE_ROWS = [
+    {
+        "character": "Boble-Draenor",
+        "attendance": "95",
+        "mplus_dungeons": "30",
+        "sim_12345": "2.9",
+        "sim_67890": "1.1",
+        "mainspec": "Holy",
+        "role": "raider",
+    },
+    {
+        "character": "Kotoma-Draenor",
+        "attendance": "80",
+        "mplus_dungeons": "15",
+        "mainspec": "Protection",
+        "role": "trial",
+    },
+]
+
+SAMPLE_BIS = {
+    "Boble-Draenor": [12345, 67890],
+    "Kotoma-Draenor": [],
+}
+
+
+class TestExportBundle:
+    def test_schema_field_present(self):
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        assert bundle["schema"] == "bobleloot-export-v1"
+
+    def test_character_count(self):
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        assert len(bundle["characters"]) == 2
+
+    def test_bis_round_trip(self):
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        char = bundle["characters"]["Boble-Draenor"]
+        assert set(char["bis"]) == {12345, 67890}
+
+    def test_sims_round_trip(self):
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        char = bundle["characters"]["Boble-Draenor"]
+        assert char["sims"][12345] == pytest.approx(2.9)
+        assert char["sims"][67890] == pytest.approx(1.1)
+
+    def test_mainspec_and_role_included(self):
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        char = bundle["characters"]["Boble-Draenor"]
+        assert char["mainspec"] == "Holy"
+        assert char["role"] == "raider"
+
+    def test_scoring_config_preserved(self):
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        cfg = bundle["scoringConfig"]
+        assert cfg["simCap"] == 5.0
+        assert cfg["mplusCap"] == 40
+        assert cfg["historyCap"] == 5
+
+    def test_no_api_key_in_bundle(self):
+        """The exported bundle must never contain API credentials."""
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        bundle_str = json.dumps(bundle)
+        assert "api_key" not in bundle_str.lower()
+        assert "authorization" not in bundle_str.lower()
+        assert "WOWAUDIT_API_KEY" not in bundle_str
+
+    def test_empty_rows_produces_empty_characters(self):
+        bundle = wa.export_bundle([], {}, 5.0, 40, 5)
+        assert bundle["characters"] == {}
+
+    def test_team_url_optional(self):
+        without = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        assert "teamUrl" not in without
+
+        with_url = wa.export_bundle(
+            SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5,
+            team_url="https://wowaudit.com/eu/test"
+        )
+        assert with_url["teamUrl"] == "https://wowaudit.com/eu/test"
+
+    def test_json_serialisable(self):
+        """The bundle must be serialisable to JSON without errors."""
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        result = json.dumps(bundle)
+        reloaded = json.loads(result)
+        assert reloaded["schema"] == "bobleloot-export-v1"
+
+    def test_character_missing_sims_still_included(self):
+        """Characters without sim columns must still appear with empty sims."""
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        char = bundle["characters"]["Kotoma-Draenor"]
+        assert char["sims"] == {}
+
+    def test_export_flag_writes_file(self, tmp_path):
+        """Integration: passing rows directly to export_bundle and writing JSON."""
+        out = tmp_path / "bundle.json"
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        out.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+        loaded = json.loads(out.read_text(encoding="utf-8"))
+        assert loaded["schema"] == "bobleloot-export-v1"
+        assert "Boble-Draenor" in loaded["characters"]
+
+    def test_exported_at_and_generated_at_present(self):
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        assert "exportedAt" in bundle
+        assert "generatedAt" in bundle
+        # Both should be ISO-8601 UTC strings ending in Z.
+        assert bundle["exportedAt"].endswith("Z")
+        assert bundle["generatedAt"].endswith("Z")
+
+    def test_custom_weights_preserved(self):
+        custom_w = {"sim": 0.5, "bis": 0.1, "history": 0.2,
+                    "attendance": 0.1, "mplus": 0.1}
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5,
+                                  weights=custom_w)
+        assert bundle["scoringConfig"]["weights"]["sim"] == pytest.approx(0.5)
+
+    def test_default_weights_used_when_none_passed(self):
+        bundle = wa.export_bundle(SAMPLE_ROWS, SAMPLE_BIS, 5.0, 40, 5)
+        w = bundle["scoringConfig"]["weights"]
+        assert w["sim"] == pytest.approx(0.40)
+        assert w["bis"] == pytest.approx(0.20)
