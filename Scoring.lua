@@ -237,3 +237,103 @@ function Scoring:ComputeAll(itemID, profile, opts)
 
     return results
 end
+
+-- ── Score-trend tracking (3.8) ────────────────────────────────────────────
+
+-- Append a score observation to the rolling history for `name`.
+-- Prunes entries older than profile.trendHistoryDays before appending
+-- so the table stays bounded.
+-- This function is a no-op when profile.trackTrends is false.
+function Scoring:RecordScore(name, itemID, score, profile)
+    if not profile or not profile.trackTrends then return end
+    if score == nil then return end
+
+    local history = profile.scoreHistory
+    if type(history) ~= "table" then return end
+
+    local days    = profile.trendHistoryDays or 28
+    local cutoff  = time() - days * 24 * 3600
+    local entries = history[name]
+    if type(entries) ~= "table" then
+        entries = {}
+        history[name] = entries
+    end
+
+    -- Prune stale entries (linear, but arrays are small).
+    local i = 1
+    while i <= #entries do
+        if (entries[i].ts or 0) < cutoff then
+            table.remove(entries, i)
+        else
+            i = i + 1
+        end
+    end
+
+    -- Append new record.
+    entries[#entries + 1] = { ts = time(), score = score, itemID = itemID }
+end
+
+-- Return per-observation records for (name, itemID) within the last `days`.
+-- Returns: { { ts = <unix>, score = <float> }, ... } sorted oldest-first.
+-- Returns {} if no data exists.
+function Scoring:GetScoreTrend(name, itemID, days, profile)
+    if not profile then
+        local addonObj = ns.addon
+        profile = addonObj and addonObj.db and addonObj.db.profile
+    end
+    if not profile then return {} end
+
+    local history = profile.scoreHistory
+    if type(history) ~= "table" then return {} end
+
+    local entries = history[name]
+    if type(entries) ~= "table" then return {} end
+
+    days = days or (profile.trendHistoryDays or 28)
+    local cutoff = time() - days * 24 * 3600
+    local result = {}
+    for _, e in ipairs(entries) do
+        if (e.ts or 0) >= cutoff and e.itemID == itemID then
+            result[#result + 1] = { ts = e.ts, score = e.score }
+        end
+    end
+    -- Already appended in chronological order (RecordScore always appends).
+    return result
+end
+
+-- Return a one-line summary of overall score movement for `name`
+-- across all items in the trend window.
+-- Returns: { first = float, last = float, delta = float, count = int }
+--   or nil if fewer than 2 observations exist.
+function Scoring:GetTrendSummary(name, profile)
+    if not profile then
+        local addonObj = ns.addon
+        profile = addonObj and addonObj.db and addonObj.db.profile
+    end
+    if not profile then return nil end
+
+    local history = profile.scoreHistory
+    if type(history) ~= "table" then return nil end
+
+    local entries = history[name]
+    if type(entries) ~= "table" or #entries < 2 then return nil end
+
+    local days   = profile.trendHistoryDays or 28
+    local cutoff = time() - days * 24 * 3600
+    local valid  = {}
+    for _, e in ipairs(entries) do
+        if (e.ts or 0) >= cutoff then
+            valid[#valid + 1] = e
+        end
+    end
+    if #valid < 2 then return nil end
+
+    local first = valid[1].score
+    local last  = valid[#valid].score
+    return {
+        first = first,
+        last  = last,
+        delta = last - first,
+        count = #valid,
+    }
+end

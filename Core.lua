@@ -276,7 +276,13 @@ end
 
 function BobleLoot:GetScore(itemID, candidateName, opts)
     if not ns.Scoring then return nil end
-    return ns.Scoring:Compute(itemID, candidateName, self.db.profile, self:GetData(), opts)
+    local score, breakdown = ns.Scoring:Compute(
+        itemID, candidateName, self.db.profile, self:GetData(), opts)
+    -- Record for trend history (leader-side only; UnitIsGroupLeader guard).
+    if score ~= nil and UnitIsGroupLeader("player") and ns.Scoring.RecordScore then
+        ns.Scoring:RecordScore(candidateName, itemID, score, self.db.profile)
+    end
+    return score, breakdown
 end
 
 -- Slash --------------------------------------------------------------------
