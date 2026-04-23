@@ -490,6 +490,7 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         local med, mx = computeSessionStats(rcVoting, addon, session, data)
         fillScoreTooltip(GameTooltip, addon, itemID, name, simRef, histRef, med, mx)
+        GameTooltip:AddLine("|cff666666Shift-click to compare vs top candidate|r")
         GameTooltip:Show()
     end)
     cellFrame:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -499,7 +500,67 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
     -- modifies the text content via the SetText() call above and does not
     -- touch this script slot.
     cellFrame:SetScript("OnMouseDown", function(self, button)
-        if button == "RightButton" then
+        if button == "LeftButton" and IsShiftKeyDown() then
+            if not (ns.ComparePopout and ns.ComparePopout.Open) then return end
+            if not itemID then return end
+
+            -- Find the top-ranked candidate by score in the current data set.
+            local topName, topScore
+            for _, row in ipairs(data or {}) do
+                if row.name then
+                    local s = computeScoreForRow(rcVoting, addon, session,
+                                                 row.name, simRef, histRef)
+                    if s and (not topScore or s > topScore) then
+                        topScore = s
+                        topName  = row.name
+                    end
+                end
+            end
+
+            -- If the clicked candidate IS the top candidate, compare against
+            -- the second-ranked instead (avoids a trivially identical popout).
+            local nameB = topName
+            if topName == name then
+                local secondName, secondScore
+                for _, row in ipairs(data or {}) do
+                    if row.name and row.name ~= name then
+                        local s = computeScoreForRow(rcVoting, addon, session,
+                                                     row.name, simRef, histRef)
+                        if s and (not secondScore or s > secondScore) then
+                            secondScore = s
+                            secondName  = row.name
+                        end
+                    end
+                end
+                nameB = secondName or topName
+            end
+
+            -- Single-candidate session guard.
+            if not nameB or nameB == name then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:AddLine("BobleLoot \226\128\148 Compare")
+                GameTooltip:AddLine(
+                    "Need at least two scored candidates to compare.", 1, 0.5, 0.5)
+                GameTooltip:Show()
+                C_Timer.After(2, function() GameTooltip:Hide() end)
+                return
+            end
+
+            -- Retrieve item link for the title bar.
+            local iLink
+            if rcVoting.GetLootTable then
+                local lt = rcVoting:GetLootTable()
+                if lt and lt[session] then iLink = lt[session].link end
+            end
+
+            local med, mx = computeSessionStats(rcVoting, addon, session, data)
+            ns.ComparePopout:Open(name, nameB, itemID, iLink, {
+                simReference     = simRef,
+                historyReference = histRef,
+                sessionMedian    = med,
+                sessionMax       = mx,
+            })
+        elseif button == "RightButton" then
             GameTooltip:Hide()
             if ns.ExplainPanel and ns.ExplainPanel.Open then
                 local med, mx = computeSessionStats(rcVoting, addon, session, data)
