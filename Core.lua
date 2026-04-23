@@ -14,7 +14,7 @@ local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
-BobleLoot.version = "1.1.0"
+BobleLoot.version = "1.2.0-dev"
 
 local DB_DEFAULTS = {
     profile = {
@@ -30,6 +30,20 @@ local DB_DEFAULTS = {
             mainspec = 1.0,
             minor    = 0.5,
         },
+        -- Per-role history weight multiplier (2.2).
+        -- 1.0 = no adjustment, 0.5 = half influence, 0.0 = history excluded.
+        roleHistoryWeights = {
+            raider = 1.0,
+            trial  = 0.5,
+            bench  = 0.5,
+        },
+        -- Vault and BOE loot weight relative to a normal awarded drop (2.4).
+        vaultWeight = 0.5,
+        -- Vault selection entries stored as synthetic loot history (2.4).
+        vaultEntries = {},
+        -- Whether sim selection uses character's main spec (true) or max
+        -- across all specs (false). Default true per 2.1 design.
+        specAwareSimSelection = true,
         weights = {
             sim        = 0.40,
             bis        = 0.20,
