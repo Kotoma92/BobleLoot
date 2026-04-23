@@ -405,6 +405,42 @@ function Sync:GetRecentWarnings()
     return self._warnings
 end
 
+--- Returns a snapshot of all currently in-flight chunked transfers.
+-- Shape: { [senderName] = { received = N, total = M, startedAt = t, version = v } }
+-- `startedAt` is a Unix timestamp (time()).
+-- Consumed by plan 3.12 toast system's progress display and /bl syncinflight.
+-- Do not mutate the returned table.
+function Sync:GetInflightTransfers()
+    local result = {}
+    if not self._inFlight then return result end
+    for sender, versions in pairs(self._inFlight) do
+        for version, entry in pairs(versions) do
+            -- Return the most recent in-flight entry per sender.
+            -- In practice there is at most one per sender at a time.
+            if not result[sender] or entry.startedAt > result[sender].startedAt then
+                result[sender] = {
+                    received  = entry.received,
+                    total     = entry.total,
+                    startedAt = entry.startedAt,
+                    version   = version,
+                }
+            end
+        end
+    end
+    return result
+end
+
+--- Discard all pending chunk data from BobleLootSyncDB.
+-- Called by plan 2B's DB migration/prune step (and by Sync:Setup directly
+-- until 2B is implemented). Any incomplete transfers from a prior session
+-- are unresumable because AceTimer handles do not survive reload.
+function Sync:PrunePendingChunks()
+    if _G.BobleLootSyncDB then
+        _G.BobleLootSyncDB.pendingChunks = {}
+    end
+    self._inFlight = {}
+end
+
 ----------------------------------------------------------------------------
 -- chunked transfer receive path
 ----------------------------------------------------------------------------
