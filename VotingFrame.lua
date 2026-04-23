@@ -446,6 +446,27 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
         GameTooltip:Show()
     end)
     cellFrame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    -- Right-click on score cell: open the pinnable explain panel (roadmap 2.9).
+    -- This handler is scoped to the score cell only; 2E's conflict indicator
+    -- modifies the text content via the SetText() call above and does not
+    -- touch this script slot.
+    cellFrame:SetScript("OnMouseDown", function(self, button)
+        if button == "RightButton" then
+            GameTooltip:Hide()
+            if ns.ExplainPanel and ns.ExplainPanel.Open then
+                local med, mx = computeSessionStats(rcVoting, addon, session, data)
+                ns.ExplainPanel:Open(itemID, name, {
+                    simReference     = simRef,
+                    historyReference = histRef,
+                    sessionMedian    = med,
+                    sessionMax       = mx,
+                })
+            end
+        end
+    end)
+    -- EnableMouse so the OnMouseDown fires (lib-st cells may not have this by default).
+    cellFrame:EnableMouse(true)
 end
 
 local function sortFn(table, rowa, rowb, sortbycol)
