@@ -205,3 +205,35 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
     end
     return score, breakdown
 end
+
+-- Compute scores for all characters in the loaded data file for a given
+-- itemID. Returns a sorted array:
+--   { { name = "...", score = 74.2, breakdown = {...} }, ... }
+-- Characters with nil scores (missing sim data when sim weight > 0,
+-- or no character entry at all) are excluded from the result.
+-- `profile` defaults to addon.db.profile if ns.addon is available.
+-- `opts` is forwarded to Compute unchanged (simReference, historyReference, etc).
+function Scoring:ComputeAll(itemID, profile, opts)
+    local data = _G.BobleLoot_Data
+    if not data or not data.characters then return {} end
+
+    if not profile then
+        local addonObj = ns.addon
+        profile = addonObj and addonObj.db and addonObj.db.profile
+    end
+    if not profile then return {} end
+
+    local results = {}
+    for name, _ in pairs(data.characters) do
+        local score, breakdown = self:Compute(itemID, name, profile, data, opts)
+        if score ~= nil then
+            results[#results + 1] = { name = name, score = score, breakdown = breakdown }
+        end
+    end
+
+    table.sort(results, function(a, b)
+        return (a.score or 0) > (b.score or 0)
+    end)
+
+    return results
+end
