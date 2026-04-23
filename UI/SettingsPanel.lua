@@ -909,6 +909,60 @@ function BuildTuningTab(parent)
         end,
     })
 
+    -- ── Ghost Presets section ────────────────────────────────────────
+    local ghostCard, ghostInner = MakeSection(body, "Ghost Weights Preset")
+    ghostCard:SetPoint("TOPLEFT",  trendCard, "BOTTOMLEFT",  0, -8)
+    ghostCard:SetPoint("TOPRIGHT", trendCard, "BOTTOMRIGHT", 0, -8)
+    ghostCard:SetHeight(170)
+    ghostInner:SetHeight(150)
+
+    local T2 = ns.Theme
+    local ghostNote = ghostInner:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    ghostNote:SetFont(T2.fontBody, T2.sizeSmall)
+    ghostNote:SetTextColor(T2.muted[1], T2.muted[2], T2.muted[3])
+    ghostNote:SetPoint("TOPLEFT", ghostInner, "TOPLEFT", 0, -2)
+    ghostNote:SetText("Farm preset \xe2\x80\x94 used when the ghost-weights button is active.")
+
+    -- Five weight sliders for ghostPresets.farm.*
+    local GHOST_KEYS   = { "sim", "bis", "history", "attendance", "mplus" }
+    local GHOST_LABELS = { sim="Sim", bis="BiS", history="History",
+                           attendance="Attendance", mplus="M+" }
+    local ghostSliderY = -16
+    for _, k in ipairs(GHOST_KEYS) do
+        local key = k  -- upvalue
+        MakeSlider(ghostInner, {
+            label    = GHOST_LABELS[key],
+            min      = 0, max = 1, step = 0.01,
+            isPercent = true,
+            width    = 220, x = 0, y = ghostSliderY,
+            get = function()
+                if not addon then return 0 end
+                local gp = addon.db.profile.ghostPresets
+                return (gp and gp.farm and gp.farm[key]) or 0
+            end,
+            set = function(v)
+                if not addon then return end
+                local gp = addon.db.profile.ghostPresets
+                if gp and gp.farm then
+                    gp.farm[key] = v
+                end
+                -- If ghost mode is currently active, refresh.
+                if ns.VotingFrame and ns.VotingFrame.ghostMode then
+                    ns.VotingFrame.SetGhostMode(true)
+                end
+            end,
+        })
+        ghostSliderY = ghostSliderY - 26
+    end
+
+    -- Active preset label (non-interactive; ghost button always uses "farm" in v1.3)
+    local activeLbl = ghostInner:CreateFontString(nil, "OVERLAY",
+                                                  "GameFontNormalSmall")
+    activeLbl:SetFont(T2.fontBody, T2.sizeSmall)
+    activeLbl:SetTextColor(T2.accent[1], T2.accent[2], T2.accent[3])
+    activeLbl:SetPoint("BOTTOMLEFT", ghostCard, "BOTTOMLEFT", 8, 6)
+    activeLbl:SetText("Ghost button applies: Farm preset")
+
     -- Refresh state on tab show.
     body:SetScript("OnShow", function()
         if not addon then return end
