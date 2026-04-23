@@ -51,6 +51,8 @@ local DB_DEFAULTS = {
         simCap       = 5.0,
         mplusCap     = 40,   -- M+ dungeons completed this season -> 1.0
         historyCap   = 5,
+        conflictThreshold = 5,   -- 2.10: ~prefix when top-two gap <= this
+        suppressTransparencyLabel = false,  -- 2.11: player hides BL label even when leader enables transparency
         minimap  = { hide = false, minimapPos = 220 },
         panelPos = { point = "CENTER", x = 0, y = 0 },
         lastTab  = "weights",
@@ -222,6 +224,14 @@ function BobleLoot:OnSlashCommand(input)
                 end
             end
         end
+    elseif input:match("^conflict%s+%d+$") then
+        local n = tonumber(input:match("^conflict%s+(%d+)$"))
+        if n then
+            n = math.max(0, math.min(n, 20))
+            self.db.profile.conflictThreshold = n
+            self:Print(string.format(
+                "Conflict threshold set to %d. Takes effect on next voting frame render.", n))
+        end
     elseif input == "test" or input:match("^test%s+%d+$") then
         local n = tonumber(input:match("^test%s+(%d+)$")) or self.db.profile.testItemCount or 5
         if ns.TestRunner and ns.TestRunner.Run then
@@ -229,7 +239,7 @@ function BobleLoot:OnSlashCommand(input)
         end
     else
         self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | " ..
-            "/bl transparency on|off | /bl checkdata | /bl lootdb | " ..
+            "/bl transparency on|off | /bl conflict <0-20> | /bl checkdata | /bl lootdb | " ..
             "/bl debugchar <Name-Realm> | /bl test [N] | " ..
             "/bl score <itemID> <Name-Realm> | /bl syncwarnings")
     end
