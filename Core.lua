@@ -14,7 +14,7 @@ local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
-BobleLoot.version = "1.3.0"
+BobleLoot.version = "2.0.0-dev"
 
 -- Pending awards: { [fingerprint] = { name, itemID, ts } }
 -- Populated by LH:RegisterPendingAward (called from LH:Setup event handlers).
