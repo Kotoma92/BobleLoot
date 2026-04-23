@@ -1201,6 +1201,58 @@ function BuildDataTab(parent)
     body:Hide()
     tabBodies["data"] = body
 
+    -- ── RC-not-detected banner (4.10) ─────────────────────────────────────
+    -- Shown when TryHookRC never succeeded after the 10-second grace period.
+    -- Auto-hides when BobleLoot_RCDetected fires (RC loaded later in session).
+    -- Hidden by default; shown via BobleLoot_RCMissing AceEvent.
+
+    local rcBannerCard, rcBannerInner = MakeSection(body, "")
+    rcBannerCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
+    rcBannerCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6)
+    rcBannerCard:SetHeight(44)
+    T.ApplyBackdrop(rcBannerCard, "bgSurface", "borderNormal")
+    rcBannerCard:Hide()  -- hidden until BobleLoot_RCMissing fires
+
+    local rcBannerLbl = rcBannerInner:CreateFontString(nil, "OVERLAY")
+    rcBannerLbl:SetFont(T.fontBody, T.sizeBody, "OUTLINE")
+    rcBannerLbl:SetPoint("TOPLEFT",  rcBannerInner, "TOPLEFT",  6, -4)
+    rcBannerLbl:SetPoint("TOPRIGHT", rcBannerInner, "TOPRIGHT", -6, -4)
+    -- Roadmap-specified literal text, including the WoW color escape sequence:
+    rcBannerLbl:SetText(
+        "|cffff5555RCLootCouncil not detected. "
+        .. "Score column will appear once RC loads.|r")
+
+    -- Height constants for offset math.
+    local RC_BANNER_H    = 52   -- banner card height + gap
+    local DRIFT_BANNER_H = 60   -- schema-drift banner height + gap
+
+    -- Visibility tracking flags for the two banners.
+    local _rcBannerVisible     = false
+    local _schemaCardVisible   = false
+
+    -- Helper: recompute infoCard's TOPLEFT based on which banners are visible.
+    -- Called whenever either banner's visibility changes.
+    local function _repositionDataCards()
+        local offset = -6
+        if _rcBannerVisible   then offset = offset - RC_BANNER_H    end
+        if _schemaCardVisible then offset = offset - DRIFT_BANNER_H end
+        infoCard:SetPoint("TOPLEFT", body, "TOPLEFT", 6, offset)
+    end
+
+    -- Listen for RC detection events fired by Core.lua Task 2.
+    if addon then
+        addon:RegisterMessage("BobleLoot_RCMissing", function()
+            _rcBannerVisible = true
+            rcBannerCard:Show()
+            _repositionDataCards()
+        end)
+        addon:RegisterMessage("BobleLoot_RCDetected", function()
+            _rcBannerVisible = false
+            rcBannerCard:Hide()
+            _repositionDataCards()
+        end)
+    end
+
     -- ── RC schema warning banner ──────────────────────────────────────
     -- Visible only when rcSchemaDetected.status ~= "ok".
     -- Reads the stored verdict written by LootHistory:DetectSchemaVersion.
@@ -1443,6 +1495,18 @@ function BuildDataTab(parent)
 
     -- OnShow re-reads leader state (leadership can change while panel is open).
     body:SetScript("OnShow", function()
+        -- 4.10: sync RC-not-detected banner with current hook state.
+        -- If the panel is opened after the 10s timer fired and RC is still missing,
+        -- show the banner (the AceEvent would have fired to a BuildDataTab not yet called
+        -- if the panel was never opened before the timer).
+        if not BobleLoot._rcHooked then
+            _rcBannerVisible = true
+            rcBannerCard:Show()
+        else
+            _rcBannerVisible = false
+            rcBannerCard:Hide()
+        end
+
         -- RC schema banner visibility.
         local verdict = addon and addon.db
                          and addon.db.profile
@@ -1452,13 +1516,14 @@ function BuildDataTab(parent)
             local col = (verdict.status == "degraded") and T2.warning or T2.danger
             schemaLbl:SetTextColor(col[1], col[2], col[3])
             schemaCard:Show()
-            -- Push existing cards down by 60px when banner is visible.
-            infoCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -64)
+            _schemaCardVisible = true
         else
             schemaCard:Hide()
-            -- Restore default infoCard position.
-            infoCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
+            _schemaCardVisible = false
         end
+
+        -- Reposition infoCard based on which banners are visible.
+        _repositionDataCards()
 
         updateInfoLabel()
 
