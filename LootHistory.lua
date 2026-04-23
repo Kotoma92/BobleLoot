@@ -240,7 +240,9 @@ function LH:RecordVaultSelection(addon, playerName, itemLink, ilvl)
 end
 
 -- Build name -> { total = weighted sum, counts = {bis=N, major=N, ...} }
-function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries)
+-- profile (6th param) is used for wasted-loot filtering (3.5). When nil,
+-- wasted-loot checks are skipped (backward compat with any ad-hoc callers).
+function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, profile)
     local cutoff = nil
     if days and days > 0 then
         cutoff = time() - days * 24 * 3600
@@ -284,7 +286,17 @@ function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries)
                         -- Items with unknown ilvl are kept (we'd rather
                         -- count an old entry than silently drop it).
                         local ilvlOk = (minIlvl <= 0) or (ilvl == nil) or (ilvl >= minIlvl)
-                        if timeOk and ilvlOk then
+                        -- Wasted-loot check: skip entries flagged as traded away.
+                        local wastedOk = true
+                        if profile then
+                            local link = e.lootWon or e.link or e.itemLink
+                            local iid = link and C_Item and C_Item.GetItemInfoInstant and
+                                select(2, C_Item.GetItemInfoInstant(link))
+                            if iid and self:IsWasted(name, iid, profile) then
+                                wastedOk = false
+                            end
+                        end
+                        if timeOk and ilvlOk and wastedOk then
                             row.counts[cat] = (row.counts[cat] or 0) + 1
                             row.total = row.total + (weights[cat] or 0)
                         end
@@ -312,7 +324,7 @@ function LH:Apply(addon)
     local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
     local weights = effectiveWeights(profile)
     local rows    = self:CountItemsReceived(db, days, weights, minIlvl,
-                                            profile.vaultEntries or {})
+                                            profile.vaultEntries or {}, profile)
     local matched, scanned = 0, 0
     for name, _ in pairs(rows) do scanned = scanned + 1 end
     for name, char in pairs(data.characters) do
