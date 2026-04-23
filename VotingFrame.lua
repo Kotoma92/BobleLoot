@@ -253,7 +253,10 @@ local function formatScore(score, inDataset, median, max, conflict)
     if not score then
         -- In dataset but Scoring:Compute returned nil (sim-weight=0 and
         -- no other data, or literally all components missing).
-        return "|cff666666?|r"
+        -- Use Theme.muted dynamically so colorblind palette swaps apply.
+        local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
+        return string.format("|cff%02x%02x%02x?|r",
+            math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255))
     end
     -- score is a real number (including 0.0).
     -- 2.10: build the ~ conflict prefix in Theme.muted color.
