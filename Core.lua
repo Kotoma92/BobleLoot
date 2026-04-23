@@ -219,6 +219,16 @@ function BobleLoot:OnEnable()
         self:RegisterEvent("ADDON_LOADED", "OnAddonLoaded")
     end
 
+    -- 4.11: restore color mode from saved profile.
+    -- Called after TryHookRC so VotingFrame/LootFrame consumers are already registered.
+    if ns.Theme and ns.Theme.ApplyColorMode then
+        local savedMode = self.db.profile.colorMode or "default"
+        if savedMode ~= "default" then
+            -- Only call if non-default; default is already the initial state.
+            ns.Theme:ApplyColorMode(savedMode)
+        end
+    end
+
     -- 4.10: after 10-second grace period, warn UI if RC never loaded.
     C_Timer.After(10, function()
         if not BobleLoot._rcHooked then
