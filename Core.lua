@@ -10,7 +10,7 @@ local AceConsole = LibStub("AceConsole-3.0")
 local AceDB      = LibStub("AceDB-3.0")
 
 local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
-    "AceConsole-3.0", "AceEvent-3.0", "AceComm-3.0", "AceSerializer-3.0")
+    "AceConsole-3.0", "AceEvent-3.0", "AceComm-3.0", "AceSerializer-3.0", "AceTimer-3.0")
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 

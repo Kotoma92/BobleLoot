@@ -494,6 +494,10 @@ end
 ----------------------------------------------------------------------------
 
 function Sync:Setup(addon)
+    -- Store addon reference so timer callbacks can reach Sync methods without
+    -- capturing a local. Must be set before any ScheduleTimer calls.
+    Sync._addonRef = addon
+
     -- Restore previously synced data if no fresh local file is present
     -- *or* if the synced one is newer.
     _G.BobleLootSyncDB = _G.BobleLootSyncDB or {}
@@ -507,6 +511,15 @@ function Sync:Setup(addon)
 
     -- Initialize per-session peer table (re-learned via HELLO on each login).
     Sync.peers = {}   -- [senderName] = { pv = N }; populated on HELLO receive
+
+    -- In-flight transfer state; keyed by sender name then version string.
+    -- Mirrors BobleLootSyncDB.pendingChunks but the timer handles live here
+    -- (timers cannot be serialized into SavedVariables).
+    Sync._inFlight = {}   -- [sender][version] = { received=N, total=M, startedAt=t, timerHandle=h }
+
+    -- Discard any chunks left over from a previous session (timers don't survive reload).
+    -- Plan 2B will call this from its migration runner; until 2B ships, call it here.
+    self:PrunePendingChunks()
 
     local saved = _G.BobleLootSyncDB.data
     if saved and saved.characters then

@@ -3,7 +3,7 @@
 ## Notes: Adds a 0-100 candidate score column to RCLootCouncil based on WoWAudit sims, BiS lists, attendance, M+ score and loot history.
 ## Author: <your-guild>
 ## Version: 1.1.0
-## OptionalDeps: RCLootCouncil
+## OptionalDeps: RCLootCouncil, AceTimer-3.0
 ## SavedVariables: BobleLootDB, BobleLootSyncDB
 ## X-Category: Raid
 ## IconTexture: Interface\Icons\inv_misc_dice_01
