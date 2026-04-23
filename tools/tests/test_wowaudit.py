@@ -1578,3 +1578,65 @@ def test_build_lua_omits_renames_table_when_empty():
 def test_renames_json_file_exists():
     """tools/renames.json is present on disk."""
     assert (TOOLS_DIR / "renames.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Task 4A-4 — scoreOverrides sidecar (item 4.7)
+# ---------------------------------------------------------------------------
+
+def test_build_lua_emits_score_overrides_table():
+    """build_lua with score_overrides writes scoreOverrides = { [id] = v }."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0,
+             "mplus_dungeons": 10}]
+    overrides = {212401: 95.0, 212405: 0.0}
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+                       score_overrides=overrides)
+    assert "scoreOverrides" in lua
+    assert "[212401] = 95.0" in lua
+    assert "[212405] = 0.0" in lua
+
+
+def test_build_lua_omits_score_overrides_when_empty():
+    """build_lua with no overrides does not write scoreOverrides."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0,
+             "mplus_dungeons": 10}]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+                       score_overrides={})
+    assert "scoreOverrides" not in lua
+
+
+def test_build_lua_score_override_float_formatting():
+    """Score override values are emitted as floats (not ints)."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0,
+             "mplus_dungeons": 10}]
+    overrides = {999999: 50}  # int input
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+                       score_overrides=overrides)
+    # Must be emitted as 50.0, not 50 (Lua distinguishes int/float only
+    # where the decimal point is present; being explicit avoids confusion)
+    assert "[999999] = 50.0" in lua
+
+
+def test_score_overrides_json_file_exists():
+    """tools/score-overrides.json is present on disk."""
+    assert (TOOLS_DIR / "score-overrides.json").is_file()
+
+
+def test_score_overrides_json_is_valid():
+    """tools/score-overrides.json is syntactically valid JSON."""
+    path = TOOLS_DIR / "score-overrides.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(doc, dict)
+
+
+def test_score_overrides_numeric_values_only(monkeypatch):
+    """Non-numeric override values are rejected with a warning, not a crash."""
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0,
+             "mplus_dungeons": 10}]
+    # Pass a string value — should be skipped rather than crashing.
+    overrides = {212401: "bad-value", 212405: 75.0}
+    # build_lua should not raise; only valid numeric entries appear.
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+                       score_overrides=overrides)
+    assert "[212405] = 75.0" in lua
+    assert "bad-value" not in lua

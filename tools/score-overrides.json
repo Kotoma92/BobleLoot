@@ -1,0 +1,4 @@
+{
+  "_comment": "Per-item score overrides. Format: itemID (as string) -> float score 0.0-100.0. Scoring:Compute returns this value directly, skipping formula computation. Use for cosmetic mounts, legendary memories, high-variance trinkets. Maintained in the same workflow as BiS files.",
+  "_example": "212401: 95.0"
+}
