@@ -626,7 +626,12 @@ function BobleLoot:OnSlashCommand(input)
             itemID = ns.VotingFrame.currentItemID
         end
         if not itemID then
-            self:Print("Usage: /bl benchscore <itemID>  (or run during a vote session)")
+            -- Distinguish "no active session" from "missing argument".
+            if input == "benchscore" then
+                self:Print("No active voting session. Open a voting session in RC first.")
+            else
+                self:Print("Usage: /bl benchscore <itemID>  (or run during a vote session)")
+            end
             return
         end
         if not (ns.Scoring and ns.Scoring.ComputeAll) then

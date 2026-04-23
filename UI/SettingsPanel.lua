@@ -1191,6 +1191,15 @@ function BuildLootDBTab(parent)
     statusLbl:SetPoint("TOPLEFT", statusInner, "TOPLEFT", 4, -2)
     statusLbl:SetWidth(380)
 
+    -- Muted hint shown when RC loot DB has no entries at all (4.12 row 28).
+    local scanHintLbl = statusInner:CreateFontString(nil, "OVERLAY")
+    scanHintLbl:SetFont(T.fontBody, T.sizeSmall)
+    scanHintLbl:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    scanHintLbl:SetPoint("TOPLEFT", statusLbl, "BOTTOMLEFT", 0, -4)
+    scanHintLbl:SetWidth(480)
+    scanHintLbl:SetText("|cff888888No RC loot history found.|r")
+    scanHintLbl:Hide()
+
     local refreshBtn = MakeButton(statusInner, "Refresh now",
         function()
             if ns.LootHistory and ns.LootHistory.Apply then
@@ -1202,6 +1211,12 @@ function BuildLootDBTab(parent)
                     lh.lastMatched or 0,
                     lh.lastScanned or 0,
                     lh.lastSource  or "?"))
+                -- Show/hide the empty-hint depending on scan count.
+                if (lh.lastScanned or 0) == 0 then
+                    scanHintLbl:Show()
+                else
+                    scanHintLbl:Hide()
+                end
             end
         end, { width = 120, height = 20, x = 390, y = -2 })
 
@@ -1213,8 +1228,15 @@ function BuildLootDBTab(parent)
                 lh.lastMatched or 0,
                 lh.lastScanned or 0,
                 lh.lastSource  or "?"))
+            -- 4.12: show the empty-hint when scan found nothing.
+            if (lh.lastScanned or 0) == 0 then
+                scanHintLbl:Show()
+            else
+                scanHintLbl:Hide()
+            end
         else
             statusLbl:SetText("|cffaaaaaaLoot history not yet applied.|r")
+            scanHintLbl:Hide()
         end
     end
 
