@@ -23,6 +23,8 @@ LootHistory.lua
 TestRunner.lua
 
 UI\Theme.lua
+UI\Toast.lua
+UI\HistoryViewer.lua
 UI\ComparePopout.lua
 UI\SettingsPanel.lua
 UI\MinimapButton.lua
