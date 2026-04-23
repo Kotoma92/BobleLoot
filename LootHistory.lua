@@ -486,6 +486,11 @@ end
 -- counts. Names in the data file are "Name-Realm"; RC keys them the same
 -- way ("Sprinty-Doomhammer"), so they line up directly.
 function LH:Apply(addon)
+    -- Refresh schema detection on every Apply so the stored verdict
+    -- reflects the current RC SavedVar state. No chat warning here;
+    -- the first-session warning is throttled in Setup.
+    self:DetectSchemaVersion(nil, addon)
+
     local data = addon:GetData()
     if not data or not data.characters then return end
     local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
@@ -735,10 +740,32 @@ function LH:IsWasted(name, itemID, profile)
     return profile.wastedLootMap[fp] == true
 end
 
+-- Set to true after the first-session drift warning has been emitted.
+-- Reset to false by Setup() on each addon load.
+LH._driftWarnedThisSession = false
+
 function LH:Setup(addon)
+    self._driftWarnedThisSession = false
     self.addon = addon
     -- Apply once after a short delay so RC has fully loaded its DB.
     C_Timer.After(5, function() self:Apply(addon) end)
+
+    -- Initial schema detection. Runs after the C_Timer.After(5) fires so
+    -- RC's SavedVariables are fully loaded. We schedule it at +6 seconds
+    -- (one second after Apply) so the first Apply result is already written
+    -- and DetectSchemaVersion can read a populated db.
+    C_Timer.After(6, function()
+        local verdict = self:DetectSchemaVersion(nil, addon)
+        -- First-session chat warning (throttled to one per session load).
+        if verdict.status ~= "ok" and not self._driftWarnedThisSession then
+            self._driftWarnedThisSession = true
+            addon:Print(string.format(
+                "|cffFFA600[BobleLoot] RCLootCouncil schema mismatch detected "
+                .. "(status: %s). Loot history may be incomplete. "
+                .. "Run |cffffffff/bl lootdb|r|cffFFA600 for details.|r",
+                verdict.status))
+        end
+    end)
     -- And re-apply whenever RC announces a new awarded item.
     local f = CreateFrame("Frame")
     f:RegisterEvent("CHAT_MSG_LOOT")
