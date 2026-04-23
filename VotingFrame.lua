@@ -29,13 +29,18 @@ local function getComponentOrder()
 end
 local function getComponentLabel() return ns.Scoring.COMPONENT_LABEL end
 
--- Pull the current itemID for a session safely.
+-- Pull the current itemID for a session using the version-compat resolver.
 local function getItemIDForSession(rcVoting, session)
-    local lt = rcVoting.GetLootTable and rcVoting:GetLootTable()
+    local resolver = VF.resolver
+    if resolver and resolver.sessionItemID then
+        local ok, id = pcall(resolver.sessionItemID, rcVoting, session)
+        if ok and id then return id end
+    end
+    -- Fallback: inline probe for safety during early startup before Detect().
+    local lt = (rcVoting.GetLootTable and rcVoting:GetLootTable())
+               or rawget(rcVoting, "lootTable")
     if not lt or not lt[session] then return nil end
     local entry = lt[session]
-    -- RCLootCouncil stores either `link` or `string` plus `id` depending
-    -- on version; try the cheap paths first.
     if entry.link then
         local id = tonumber(entry.link:match("item:(%d+)"))
         if id then return id end
@@ -654,6 +659,7 @@ function VF:Hook(addon, RC)
 
     self.addon    = addon
     self.rcVoting = rcVoting
+    self.resolver = ns.RCCompat and ns.RCCompat:GetResolver() or nil
 
     -- Avoid double-insert if user reloads.
     for _, col in ipairs(rcVoting.scrollCols) do
