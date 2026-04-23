@@ -233,6 +233,17 @@ function MB:ShowDropdown()
             end,
         },
 
+        -- Loot history viewer
+        {
+            text = "Loot history",
+            notCheckable = true,
+            func = function()
+                if ns.HistoryViewer and ns.HistoryViewer.Toggle then
+                    ns.HistoryViewer:Toggle()
+                end
+            end,
+        },
+
         -- Separator
         { text = "", disabled = true, notCheckable = true },
 
