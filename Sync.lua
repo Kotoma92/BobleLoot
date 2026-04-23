@@ -702,12 +702,17 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
             -- Log negotiation once per session per sender (informational, not a warning).
             if not (self.peers[sender] and self.peers[sender]._pvLogged) then
                 self.peers[sender]._pvLogged = true
+                local chunkedNote = (negotiated >= 3)
+                    and " [DATACHUNK enabled]"
+                    or  " [legacy DATA fallback]"
                 DEFAULT_CHAT_FRAME:AddMessage(string.format(
-                    "|cffffff00[BobleLoot]|r Proto negotiated with %s: speaking v%d " ..
+                    "|cffffff00[BobleLoot]|r Proto negotiated with %s: speaking v%d%s " ..
                     "(peer max=%d, ours=%d)",
-                    sender, negotiated, peerPv, PROTO_VERSION))
+                    sender, negotiated, chunkedNote, peerPv, PROTO_VERSION))
             end
         end
+        -- When peerPv == PROTO_VERSION (both pv=3), no log is emitted.
+        -- Both peers silently use DATACHUNK.
 
         -- Existing version-compare and REQ logic (unchanged in behaviour).
         local mine = getDataVersion(addon:GetData())
