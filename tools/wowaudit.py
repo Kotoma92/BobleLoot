@@ -71,6 +71,7 @@ DEFAULT_OUT = Path(__file__).resolve().parent.parent / "Data" / "BobleLoot_Data.
 REQUIRED_COLS = {"character", "mplus_dungeons", "attendance"}
 
 TIERS_DIR = Path(__file__).resolve().parent / "tiers"
+REPO_ROOT  = Path(__file__).resolve().parent.parent
 
 API_BASE = "https://wowaudit.com/v1"
 
@@ -105,6 +106,62 @@ def _load_tier_preset(tier_name: str) -> dict:
             return json.load(f)
     except (json.JSONDecodeError, OSError) as exc:
         sys.exit(f"Failed to load tier preset '{tier_name}': {exc}")
+
+
+# --------------------------------------------------------------------------
+# Tier configuration — YAML (item 4.1, supersedes JSON presets from 2A)
+# --------------------------------------------------------------------------
+
+TIER_CONFIG_PATH = Path(__file__).resolve().parent / "tier-config.yaml"
+
+
+def _load_tier_config(tier_name: str) -> dict:
+    """Load a tier entry from ``tools/tier-config.yaml``.
+
+    Args:
+        tier_name: Case-insensitive tier key, e.g. ``"TWW-S3"`` or
+            ``"tww-s3"``. Hyphens and underscores are both accepted.
+
+    Returns:
+        Dict with any subset of keys: ``ilvlFloor``, ``mplusCap``,
+        ``historyDays``, ``softFloor``, ``bisPath``.  Missing keys
+        in the YAML entry are absent from the returned dict (not ``None``),
+        so callers can distinguish "not configured" from "explicitly null".
+
+    Raises:
+        SystemExit: If ``tier-config.yaml`` is missing, malformed, or
+            the requested tier name does not appear under ``tiers:``.
+    """
+    try:
+        import yaml
+    except ImportError:
+        sys.exit(
+            "PyYAML is required for --tier. Install with: pip install pyyaml"
+        )
+
+    if not TIER_CONFIG_PATH.is_file():
+        sys.exit(
+            f"tools/tier-config.yaml not found at {TIER_CONFIG_PATH}. "
+            "Create it or use the per-tier JSON presets in tools/tiers/."
+        )
+
+    try:
+        doc = yaml.safe_load(TIER_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:  # yaml.YAMLError or OSError
+        sys.exit(f"Failed to parse tools/tier-config.yaml: {exc}")
+
+    tiers: dict = doc.get("tiers") or {}
+    normalised = tier_name.strip().lower()
+    if normalised not in tiers:
+        available = sorted(tiers.keys())
+        sys.exit(
+            f"Tier '{tier_name}' not found in tools/tier-config.yaml. "
+            f"Available tiers: {', '.join(available) or '(none)'}."
+        )
+
+    entry: dict = tiers[normalised] or {}
+    return {k: v for k, v in entry.items() if v is not None or k == "bisPath"}
+
 
 # --------------------------------------------------------------------------
 # BiS derivation from wishlist sim scores
@@ -1058,9 +1115,15 @@ def main():
 
     # Apply tier preset (values are only used as defaults if the
     # corresponding explicit CLI argument was not provided).
+    # 4.1: now reads from tier-config.yaml via _load_tier_config().
     tier_preset: dict = {}
     if args.tier is not None:
-        tier_preset = _load_tier_preset(args.tier)
+        tier_preset = _load_tier_config(args.tier)
+        # Wire bisPath: if tier-config.yaml specifies a bisPath and --bis
+        # was not explicitly provided, set args.bis automatically.
+        preset_bis = tier_preset.get("bisPath")
+        if preset_bis and args.bis is None:
+            args.bis = REPO_ROOT / preset_bis
 
     def _preset(key: str, cli_val, default):
         """Return cli_val if it was explicitly set, else preset value, else default."""

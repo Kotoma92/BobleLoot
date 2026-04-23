@@ -1297,3 +1297,66 @@ def test_derive_bis_from_rows_custom_threshold():
     result = wa._derive_bis_from_rows(rows, threshold=5.0)
     assert 212401 not in result.get("Boble-Stormrage", [])
     assert 212403 in result.get("Boble-Stormrage", [])
+
+
+# ---------------------------------------------------------------------------
+# Task 4A-1 — tier-config YAML loading (item 4.1)
+# ---------------------------------------------------------------------------
+
+import yaml  # PyYAML — installed as part of 4A
+
+TIER_CONFIG_PATH = TOOLS_DIR / "tier-config.yaml"
+
+
+def test_load_tier_config_returns_known_tier():
+    """_load_tier_config('tww-s3') returns the expected preset dict."""
+    preset = wa._load_tier_config("tww-s3")
+    assert preset["ilvlFloor"] == 636
+    assert preset["mplusCap"] == 160
+    assert preset["historyDays"] == 84
+    assert preset["softFloor"] == 6
+
+
+def test_load_tier_config_case_insensitive():
+    """Tier names are matched case-insensitively."""
+    preset = wa._load_tier_config("TWW-S3")
+    assert preset["mplusCap"] == 160
+
+
+def test_load_tier_config_tww_s2():
+    """Historical tier tww-s2 is resolvable."""
+    preset = wa._load_tier_config("tww-s2")
+    assert preset["ilvlFloor"] == 610
+
+
+def test_load_tier_config_unknown_tier_exits():
+    """Unknown tier name causes sys.exit with a helpful message."""
+    with pytest.raises(SystemExit) as exc_info:
+        wa._load_tier_config("totally-fake-tier-xyz")
+    assert "totally-fake-tier-xyz" in str(exc_info.value).lower()
+
+
+def test_load_tier_config_bis_path_returned():
+    """bisPath is returned as a string when present."""
+    preset = wa._load_tier_config("tww-s3")
+    assert preset["bisPath"] == "bis/tww-s3"
+
+
+def test_load_tier_config_null_bis_path():
+    """bisPath is None when the YAML entry has null."""
+    preset = wa._load_tier_config("tww-s2")
+    assert preset["bisPath"] is None
+
+
+def test_load_tier_config_yaml_file_exists():
+    """tools/tier-config.yaml is present on disk."""
+    assert TIER_CONFIG_PATH.is_file(), (
+        f"tools/tier-config.yaml not found at {TIER_CONFIG_PATH}"
+    )
+
+
+def test_tier_config_yaml_is_valid():
+    """tier-config.yaml is syntactically valid YAML."""
+    doc = yaml.safe_load(TIER_CONFIG_PATH.read_text(encoding="utf-8"))
+    assert "tiers" in doc
+    assert isinstance(doc["tiers"], dict)

@@ -1,0 +1,29 @@
+# tools/tier-config.yaml
+# Multi-tier BobleLoot configuration.
+# Used by: py tools/wowaudit.py --tier <name>
+#
+# Keys per entry (all optional):
+#   ilvlFloor   — minimum item level for loot history (int)
+#   mplusCap    — season M+ dungeon cap (int)
+#   historyDays — rolling loot-history window in days (int)
+#   softFloor   — history denominator soft floor (int)
+#   bisPath     — path to BiS directory or file, relative to repo root (str | null)
+#
+# BiS retention: NEVER delete old tier directories. Each tier's bisPath
+# must remain readable so that --tier <old-tier> can reproduce a
+# historically-accurate Lua file. Add new tiers; never remove old ones.
+
+tiers:
+  tww-s2:
+    ilvlFloor:   610
+    mplusCap:    130
+    historyDays: 84
+    softFloor:   5
+    bisPath:     null
+
+  tww-s3:
+    ilvlFloor:   636
+    mplusCap:    160
+    historyDays: 84
+    softFloor:   6
+    bisPath:     "bis/tww-s3"
