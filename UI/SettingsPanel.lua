@@ -49,6 +49,7 @@ local TAB_LABELS = { weights="Weights", tuning="Tuning",
 local tabs       = {}  -- tab button frames keyed by name
 local tabBodies  = {}  -- content frames keyed by name
 local activeTab  = nil
+local _sliderCount = 0  -- unique-name generator for MakeSlider (see below)
 
 -- ── Local widget helpers ───────────────────────────────────────────────
 --
@@ -105,7 +106,15 @@ local function MakeSlider(parent, opts)
     local T = ns.Theme
     local w = opts.width or 260
 
-    local s = CreateFrame("Slider", nil, parent, "OptionsSliderTemplate")
+    -- OptionsSliderTemplate uses $parent-prefixed child FontStrings (Low,
+    -- High, Text). Those children inherit the slider's name; if the slider
+    -- is anonymous, the global lookups below would concatenate nil and abort
+    -- this whole function (breaking every subsequent tab builder). Give each
+    -- slider a unique name so the children resolve.
+    _sliderCount = _sliderCount + 1
+    local sliderName = "BobleLootSettingsSlider" .. _sliderCount
+
+    local s = CreateFrame("Slider", sliderName, parent, "OptionsSliderTemplate")
     s:SetPoint("TOPLEFT", parent, "TOPLEFT", opts.x or 0, opts.y or 0)
     s:SetWidth(w)
     s:SetHeight(16)
@@ -114,12 +123,14 @@ local function MakeSlider(parent, opts)
     s:SetValue(opts.get())
     s:SetObeyStepOnDrag(true)
 
-    -- Suppress the default "Low" / "High" template text.
-    local low  = s:GetRegions()  -- first region is Low text in template
-    -- Safer: find named children.
-    if _G[s:GetName() .. "Low"]  then _G[s:GetName() .. "Low"]:SetText("") end
-    if _G[s:GetName() .. "High"] then _G[s:GetName() .. "High"]:SetText("") end
-    if _G[s:GetName() .. "Text"] then _G[s:GetName() .. "Text"]:SetText("") end
+    -- Suppress the default "Low" / "High" template text (nil-guarded in case
+    -- the template ever changes and the children don't exist).
+    local lowFS  = _G[sliderName .. "Low"]
+    local highFS = _G[sliderName .. "High"]
+    local textFS = _G[sliderName .. "Text"]
+    if lowFS  then lowFS:SetText("")  end
+    if highFS then highFS:SetText("") end
+    if textFS then textFS:SetText("") end
 
     -- Cyan track tint.
     local thumb = s:GetThumbTexture()
