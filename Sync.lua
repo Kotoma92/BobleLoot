@@ -1,32 +1,47 @@
---[[ Sync.lua — BobleLoot raid sync protocol v2
-     Implements: roadmap items 1.4 (schemaVersion) and 1.5 (proto + Adler32).
+--[[ Sync.lua — BobleLoot raid sync protocol v3
+     Implements: roadmap items 1.4 (schemaVersion), 1.5 (proto + Adler32),
+                 and 2.8 (chunked sync / DATACHUNK message type).
 
 ── Distribution model ────────────────────────────────────────────────────────
   Whoever holds the highest `version` (generatedAt timestamp from wowaudit.py)
   is the de-facto data master for that raid session. On entering a group,
   every BobleLoot client announces its version with HELLO. Anyone who hears a
   newer version sends a REQ whisper; the master replies with DATA (compressed
-  + serialized, with Adler32 integrity field).
+  + serialized, with Adler32 integrity field) or a sequence of DATACHUNK
+  messages when both peers speak pv=3.
 
 ── Wire format (AceSerializer-encoded tables) ────────────────────────────────
   All envelopes carry:
     proto   [number]  Protocol version this message was encoded with.
                       Absent on v1 legacy messages (treated as proto=1).
-                      Currently PROTO_VERSION = 2.
+                      PROTO_VERSION = 3 as of Batch 2C.
 
   HELLO    { kind="HELLO",    proto=N, v="<generatedAt>", n=<count>, pv=N }
-             pv = highest proto the sender speaks (used for negotiation).
+             pv = highest proto the sender speaks (3 for Batch 2C clients).
+             pv=3 clients use DATACHUNK for DATA transfers; pv<=2 peers receive full-DATA fallback.
 
   REQ      { kind="REQ",      proto=N, v="<generatedAt>" }
              Whisper to the HELLO sender requesting the named version.
 
   DATA     { kind="DATA",     proto=N, v="<generatedAt>",
              payload="<base64-like>", adler=<number> }
+             Fallback path used only when negotiated proto < 3 (pv<=2 peer).
              payload = LibDeflate:EncodeForWoWAddonChannel(
                          LibDeflate:CompressDeflate(
                            AceSerializer:Serialize(data), {level=9}))
              adler   = LibDeflate:Adler32(AceSerializer:Serialize(data))
                        (computed on the PRE-compression serialized string)
+
+  DATACHUNK { kind="DATACHUNK", proto=3, v="<generatedAt>",
+              seq=N, total=N, chunk="<slice>", adler=<number> }
+             Used when both peers have pv=3.
+             chunk   = slice [seq..seq+CHUNK_SIZE-1] of the full encoded payload.
+             adler   = Adler32 of the full pre-compression serialized string;
+                       identical in all envelopes of the same transfer;
+                       verified by receiver only after all total chunks arrive.
+             Receiver accumulates in BobleLootSyncDB.pendingChunks[sender][v];
+             promotes to BobleLoot_Data when received==total and Adler32 passes.
+             30-second timeout (CHUNK_TIMEOUT) discards incomplete transfers.
 
   SETTINGS { kind="SETTINGS", proto=N, transparency=true|false }
              Leader-only; broadcast to RAID/PARTY.
@@ -35,9 +50,15 @@
              scores={["Name-Realm"]=number,...} }
              Leader-only; broadcast to RAID/PARTY.
 
-── Protocol negotiation ──────────────────────────────────────────────────────
+── Protocol negotiation (v3) ─────────────────────────────────────────────────
+  HELLO.pv advertises the sender's highest supported proto.
+  Receiver negotiates: effectivePv = math.min(PROTO_VERSION, peer.pv).
+  effectivePv >= 3  → SendDataChunked (DATACHUNK path).
+  effectivePv <= 2  → SendData legacy (DATA path, single message).
+  pv=1 peers (pre-1C clients): full-DATA, no Adler32 sent.
+  pv=2 peers (1C clients, no chunking): full-DATA with Adler32.
+  pv=3 peers (2C clients): DATACHUNK with per-transfer Adler32.
   On receiving HELLO, the receiver records sender.pv in Sync.peers[sender].
-  Subsequent messages to that peer are sent at math.min(PROTO_VERSION, peer.pv).
   A peer with no pv field (v1 client) is treated as pv=1.
   proto=1 envelopes are accepted (no adler field expected or verified).
   proto > PROTO_VERSION envelopes are rejected and logged once per sender.
@@ -47,6 +68,9 @@
   string before compression. LibDeflate:Adler32 is the public API used —
   it is LibDeflate's only public checksum function (no CRC32 is exposed).
   Receiver verifies before decompressing; mismatch → log once, drop.
+  DATACHUNK transfers carry the same Adler32 in every chunk envelope;
+  the receiver verifies it only after all chunks have been reassembled —
+  not per-chunk. A mismatch after reassembly discards the entire transfer.
 
 ── Rejection log ─────────────────────────────────────────────────────────────
   All drops are written to the _warnings ring buffer (max 20 entries).
@@ -54,7 +78,7 @@
   In-game: /bl syncwarnings
 
 ── Channel ───────────────────────────────────────────────────────────────────
-  RAID or PARTY (auto-detected). REQ and DATA are WHISPER.
+  RAID or PARTY (auto-detected). REQ, DATA, and DATACHUNK are WHISPER.
   Prefix: "BobleLootSync"
 ]]
 
@@ -66,22 +90,34 @@ local PREFIX = "BobleLootSync"
 
 -- Protocol and schema constants (see wire-format reference at bottom of plan).
 local SCHEMA_VERSION     = 1   -- BobleLootSyncDB.schemaVersion; consumed by plan 2.7
-local PROTO_VERSION      = 2   -- highest proto this client speaks
+local PROTO_VERSION      = 3   -- highest proto this client speaks
 local MIN_PROTO_VERSION  = 1   -- lowest proto this client will accept from peers
 -- Message kind strings (one authoritative list; never duplicated).
-local KIND_HELLO    = "HELLO"
-local KIND_REQ      = "REQ"
-local KIND_DATA     = "DATA"
-local KIND_SETTINGS = "SETTINGS"
-local KIND_SCORES   = "SCORES"
+local KIND_HELLO     = "HELLO"
+local KIND_REQ       = "REQ"
+local KIND_DATA      = "DATA"
+local KIND_DATACHUNK = "DATACHUNK"
+local KIND_SETTINGS  = "SETTINGS"
+local KIND_SCORES    = "SCORES"
+
+-- Chunked transfer constants.
+-- CHUNK_SIZE: bytes of WoWAddonChannel-encoded output per DATACHUNK envelope.
+-- AceComm fragments at 4078 bytes; we stay well below to leave room for the
+-- serialized envelope overhead (kind, proto, v, seq, total, adler fields).
+-- See "Size Tuning" section of the implementation plan for derivation.
+local CHUNK_SIZE    = 2048   -- bytes; tunable
+local CHUNK_TIMEOUT = 30     -- seconds; discard incomplete transfers after this
 
 -- Expose for external inspection (e.g., diagnostics, plan 3.12 toast).
 Sync.PROTO_VERSION     = PROTO_VERSION
 Sync.MIN_PROTO_VERSION = MIN_PROTO_VERSION
+Sync.KIND_DATACHUNK    = KIND_DATACHUNK
+Sync.CHUNK_SIZE        = CHUNK_SIZE
+Sync.CHUNK_TIMEOUT     = CHUNK_TIMEOUT
 
 -- Session-scoped state (reset each load; not persisted).
 Sync._loggedProtoWarn = {}   -- [sender] = true; throttle proto-rejection logs
-Sync._loggedAdlerWarn = {}   -- [sender] = true; throttle Adler32-rejection logs
+Sync._loggedAdlerWarn = {}   -- [sender] = true; throttle Adler32-rejection logs (legacy DATA path only)
 Sync._warnings        = {}   -- ring buffer; max WARNINGS_MAX entries
 local WARNINGS_MAX    = 20
 
