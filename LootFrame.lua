@@ -230,6 +230,16 @@ local function renderEntry(addon, entry, entryFrame)
         return
     end
 
+    -- 2.11: player-side opt-out. Checked after the transparency-enabled
+    -- guard so we don't show a blank label when transparency is off —
+    -- the outer guard already handles that. This guard only fires when
+    -- transparency IS on but the local player has suppressed their label.
+    if addon.db and addon.db.profile and addon.db.profile.suppressTransparencyLabel then
+        fs:SetText("")
+        entryFrame[SCORE_FRAME_KEY .. "_ctx"] = nil
+        return
+    end
+
     local data = addon:GetData()
     local key  = lookupChar(data)
     local iid  = entryItemID(entry)
@@ -271,7 +281,8 @@ local function renderEntry(addon, entry, entryFrame)
         return
     end
 
-    fs:SetText(string.format("%sYour score: %d|r", colorFor(score),
+    -- 2.11: compact label. Full breakdown remains in the hover tooltip.
+    fs:SetText(string.format("%sBL: %d|r", colorFor(score),
         math.floor(score + 0.5)))
     entryFrame[SCORE_FRAME_KEY .. "_ctx"] = {
         score = score, breakdown = breakdown, fromLeader = fromLeader,
