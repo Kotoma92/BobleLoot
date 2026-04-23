@@ -386,6 +386,34 @@ local function Populate(itemID, name, opts)
                 lines[#lines+1] = { left = table.concat(extras, "  ") }
             end
         end
+
+        -- Score trend section (4.12 / 3B). Guard: require at least 2 data
+        -- points; show "No score history" when the API returns 0 or 1 entries.
+        -- GetScoreTrend is defined in Batch 3B; silently omitted if absent.
+        if ns.Scoring and ns.Scoring.GetScoreTrend then
+            local profile = addon and addon.db and addon.db.profile
+            local trend = ns.Scoring:GetScoreTrend(name, itemID,
+                              (profile and profile.trendHistoryDays) or 28,
+                              profile)
+            lines[#lines+1] = { left = " " }
+            if not trend or #trend <= 1 then
+                lines[#lines+1] = {
+                    left = "|cff666666No score history for this item yet.|r"
+                }
+            else
+                -- Trend summary line (full sparkline rendering in later batches).
+                local summary = ns.Scoring:GetTrendSummary and
+                                ns.Scoring:GetTrendSummary(name, profile)
+                if summary then
+                    local sign = (summary.delta >= 0) and "+" or ""
+                    lines[#lines+1] = {
+                        left = string.format(
+                            "|cffaaaaaaScore trend: %s%.1f over %d days|r",
+                            sign, summary.delta, summary.count)
+                    }
+                end
+            end
+        end
     end
 
     -- Build export string (for copy-to-chat).
