@@ -585,3 +585,8 @@ end
 function EP:IsShown()
     return built and frame and frame:IsShown()
 end
+
+--- Return true when at least one explain call has been made this session.
+function EP:HasLast()
+    return _lastItemID ~= nil or _lastName ~= nil
+end

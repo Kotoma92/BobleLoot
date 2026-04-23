@@ -219,6 +219,20 @@ function MB:ShowDropdown()
             end,
         },
 
+        -- Explain last score
+        {
+            text = "Explain last score",
+            notCheckable = true,
+            -- Disable when no explain context exists yet this session.
+            disabled = not (ns.ExplainPanel and ns.ExplainPanel.HasLast
+                            and ns.ExplainPanel:HasLast()),
+            func = function()
+                if ns.ExplainPanel and ns.ExplainPanel.OpenLast then
+                    ns.ExplainPanel:OpenLast()
+                end
+            end,
+        },
+
         -- Separator
         { text = "", disabled = true, notCheckable = true },
 
