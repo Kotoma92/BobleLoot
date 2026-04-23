@@ -46,3 +46,17 @@ python tools/wowaudit.py --bis bis/tww-s3/paladin-holy.json
 Use `--bis-from-wishlist` to derive BiS lists automatically from WoWAudit
 wishlist sim scores above a threshold (default 2.0%). This removes the need
 to maintain these files manually in most seasons.
+
+## Tier retention policy (Batch 4.1)
+
+**Never delete a tier directory.** When a new tier launches:
+
+1. Create `bis/<new-tier>/` and populate it.
+2. Add the new tier to `tools/tier-config.yaml` with the correct `bisPath`.
+3. Leave all old tier directories in place.
+
+This means `py tools/wowaudit.py --tier tww-s2` will always regenerate a
+historically-accurate Lua file for Season 2 scores, because `bis/tww-s2/`
+is still on disk. Old BiS lists are the source of truth for historical
+comparisons — the `tierPreset` field in `BobleLoot_Data.lua` identifies
+which tier a given data file was generated for.
