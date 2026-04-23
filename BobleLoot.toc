@@ -12,6 +12,7 @@ Libs\Libs.xml
 
 Data\BobleLoot_Data.lua
 
+Migrations.lua
 Core.lua
 Scoring.lua
 Sync.lua

@@ -161,6 +161,15 @@ local function channel()
     return nil
 end
 
+-- Returns true when `sender` is allowed to push authoritative DATA to this
+-- client (item 2.5).  The current group leader is always trusted; additional
+-- senders can be whitelisted via BobleLootSyncDB.trustedSenders.
+local function isDataSenderTrusted(sender)
+    if UnitIsGroupLeader(sender) then return true end
+    local db = _G.BobleLootSyncDB
+    return db and db.trustedSenders and db.trustedSenders[sender] == true
+end
+
 ----------------------------------------------------------------------------
 -- (de)serialize
 ----------------------------------------------------------------------------
@@ -777,6 +786,22 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
         -- This path handles the legacy single-message DATA transfer (proto <= 2 peers).
         -- proto=3 peers use DATACHUNK instead; a proto=3 peer should never send KIND_DATA
         -- but we tolerate it gracefully by processing it normally here.
+
+        -- Auth gate (item 2.5): only accept DATA from the current group leader
+        -- or a whitelisted trusted sender. Reject with a once-per-session log.
+        if not (UnitInRaid(sender) or UnitInParty(sender)) then return end
+        if not isDataSenderTrusted(sender) then
+            self._rejectedSenders = self._rejectedSenders or {}
+            if not self._rejectedSenders[sender] then
+                self._rejectedSenders[sender] = true
+                addon:Print(string.format(
+                    "DATA from %s ignored: not the group leader and not in trustedSenders.",
+                    sender))
+                self:_recordWarning(sender, "untrusted DATA sender")
+            end
+            return
+        end
+
         local mine = getDataVersion(addon:GetData())
         if not newerThan(msg.v, mine) then return end
 
@@ -870,6 +895,21 @@ function Sync:Setup(addon)
     -- Discard any chunks left over from a previous session (timers don't survive reload).
     -- Plan 2B will call this from its migration runner; until 2B ships, call it here.
     self:PrunePendingChunks()
+
+    -- Prune stale synced dataset (item 2.7): if the cached dataset is older
+    -- than 90 days it is almost certainly from a previous tier and should not
+    -- be restored.  ISO-8601 strings are lexicographically sortable so a plain
+    -- string comparison is sufficient.
+    do
+        local cutoff = date("%Y-%m-%dT%H:%M:%S", time() - 90 * 86400)
+        local savedData = _G.BobleLootSyncDB.data
+        if savedData and savedData.generatedAt and savedData.generatedAt < cutoff then
+            addon:Print(string.format(
+                "BobleLootSyncDB: pruned stale dataset (generatedAt %s, cutoff %s).",
+                tostring(savedData.generatedAt), cutoff))
+            _G.BobleLootSyncDB.data = nil
+        end
+    end
 
     local saved = _G.BobleLootSyncDB.data
     if saved and saved.characters then

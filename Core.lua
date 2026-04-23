@@ -18,6 +18,10 @@ BobleLoot.version = "1.2.0-dev"
 
 local DB_DEFAULTS = {
     profile = {
+        -- Migration framework (item 2.7): tracks the last migration version
+        -- successfully applied to this profile.  0 = no migrations run yet.
+        dbVersion     = 0,
+
         enabled       = true,
         showColumn    = true,
         testItemCount       = 5,
@@ -75,6 +79,13 @@ local DB_DEFAULTS = {
 
 function BobleLoot:OnInitialize()
     self.db = AceDB:New("BobleLootDB", DB_DEFAULTS, true)
+
+    -- Run any pending DB migrations (item 2.7).  Must happen before any
+    -- other module reads profile data, so it sits right after AceDB:New().
+    if ns.Migrations and ns.Migrations.Run then
+        ns.Migrations:Run(self.db.profile)
+    end
+
     self:RegisterChatCommand("bl",       "OnSlashCommand")
     self:RegisterChatCommand("bobleloot","OnSlashCommand")
 
@@ -103,6 +114,15 @@ function BobleLoot:OnEnable()
     if C_WeeklyRewards then
         self:RegisterEvent("WEEKLY_REWARDS_ITEM_GRABBED", "OnVaultItemGrabbed")
     end
+
+    -- Invalidate stale leader-score cache when leadership changes mid-raid
+    -- (item 2.6).  The new leader's scores are unknown until they broadcast
+    -- a fresh SCORES message; showing the old leader's scores would mislead
+    -- candidates in transparency mode.
+    self:RegisterEvent("PARTY_LEADER_CHANGED", function()
+        self._leaderScores = nil
+    end)
+
     -- Hook RCLootCouncil if present; otherwise wait for it to load.
     if not self:TryHookRC() then
         self:RegisterEvent("ADDON_LOADED", "OnAddonLoaded")
@@ -170,6 +190,24 @@ function BobleLoot:TryHookRC()
 end
 
 -- Public API ---------------------------------------------------------------
+
+-- Trusted-sender whitelist management (item 2.5).
+-- The whitelist lives in BobleLootSyncDB so it persists across reloads
+-- but is NOT profile-scoped (it is a global account-level trust decision).
+function BobleLoot:AddTrustedSender(name)
+    _G.BobleLootSyncDB = _G.BobleLootSyncDB or {}
+    _G.BobleLootSyncDB.trustedSenders = _G.BobleLootSyncDB.trustedSenders or {}
+    _G.BobleLootSyncDB.trustedSenders[name] = true
+    self:Print(string.format("'%s' added to trusted senders.", name))
+end
+
+function BobleLoot:RemoveTrustedSender(name)
+    local db = _G.BobleLootSyncDB
+    if db and db.trustedSenders then
+        db.trustedSenders[name] = nil
+    end
+    self:Print(string.format("'%s' removed from trusted senders.", name))
+end
 
 function BobleLoot:GetData()
     return _G.BobleLoot_Data
@@ -254,6 +292,23 @@ function BobleLoot:OnSlashCommand(input)
         else
             self:Print("LootHistory module not loaded.")
         end
+    elseif input:match("^trust%s+add%s+") then
+        local name = input:match("^trust%s+add%s+(.+)$")
+        if name then self:AddTrustedSender(name) else
+            self:Print("Usage: /bl trust add <Name-Realm>") end
+    elseif input:match("^trust%s+remove%s+") then
+        local name = input:match("^trust%s+remove%s+(.+)$")
+        if name then self:RemoveTrustedSender(name) else
+            self:Print("Usage: /bl trust remove <Name-Realm>") end
+    elseif input == "trust list" then
+        local db = _G.BobleLootSyncDB
+        local list = db and db.trustedSenders or {}
+        local any = false
+        for name in pairs(list) do
+            self:Print("  trusted: " .. name)
+            any = true
+        end
+        if not any then self:Print("trustedSenders is empty.") end
     elseif input:match("^debugchar%s+") then
         local name = input:match("^debugchar%s+(.+)$")
         if ns.LootHistory and ns.LootHistory.DiagnoseChar then
@@ -311,6 +366,7 @@ function BobleLoot:OnSlashCommand(input)
     else
         self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | " ..
             "/bl transparency on|off | /bl conflict <0-20> | /bl checkdata | /bl lootdb | " ..
+            "/bl trust add|remove|list <Name-Realm> | " ..
             "/bl debugchar <Name-Realm> | /bl test [N] | " ..
             "/bl score <itemID> <Name-Realm> | /bl syncwarnings | /bl syncinflight | " ..
             "/bl explain <Name-Realm>")
