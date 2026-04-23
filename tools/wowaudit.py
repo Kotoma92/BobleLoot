@@ -70,7 +70,41 @@ _load_dotenv()
 DEFAULT_OUT = Path(__file__).resolve().parent.parent / "Data" / "BobleLoot_Data.lua"
 REQUIRED_COLS = {"character", "mplus_dungeons", "attendance"}
 
+TIERS_DIR = Path(__file__).resolve().parent / "tiers"
+
 API_BASE = "https://wowaudit.com/v1"
+
+
+def _load_tier_preset(tier_name: str) -> dict:
+    """Load a tier preset JSON file from ``tools/tiers/``.
+
+    The file is looked up as ``tools/tiers/<tier_name>.json`` with
+    case-insensitive matching and hyphens normalised to lower case.
+
+    Args:
+        tier_name: e.g. ``"TWW-S3"`` or ``"tww-s3"``.
+
+    Returns:
+        Dict with any subset of keys: ``ilvlFloor``, ``mplusCap``,
+        ``historyDays``, ``softFloor``, ``bisPath``.
+
+    Raises:
+        SystemExit: If no matching preset file is found.
+    """
+    normalised = tier_name.strip().lower()
+    candidate  = TIERS_DIR / f"{normalised}.json"
+    if not candidate.is_file():
+        available = sorted(p.stem for p in TIERS_DIR.glob("*.json"))
+        sys.exit(
+            f"Tier preset '{tier_name}' not found. "
+            f"Available: {', '.join(available) or '(none)'}. "
+            f"Preset files live in tools/tiers/."
+        )
+    try:
+        with candidate.open(encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        sys.exit(f"Failed to load tier preset '{tier_name}': {exc}")
 
 # --------------------------------------------------------------------------
 # CSV / XLSX reading
@@ -207,6 +241,9 @@ def build_lua(
     history_cap: int,
     team_url: str | None = None,
     fetch_warnings: list[str] | None = None,
+    loot_min_ilvl: int = 0,
+    history_days: int | None = None,
+    tier_name: str | None = None,
 ) -> str:
     """Render BobleLoot_Data.lua from assembled rows.
 
@@ -219,6 +256,10 @@ def build_lua(
         team_url: Optional WoWAudit team URL to embed.
         fetch_warnings: Optional list of warning strings from fetch_rows;
             emitted as Lua comments and a dataWarnings array.
+        loot_min_ilvl: Minimum item level for loot history (from --tier preset
+            or --loot-min-ilvl). Emitted when non-zero.
+        history_days: Optional history window override (from --tier preset).
+        tier_name: Optional tier preset name (e.g. "TWW-S3").
 
     Returns:
         The Lua file contents as a string.
@@ -264,6 +305,12 @@ def build_lua(
     out.append(f"    simCap      = {sim_cap},")
     out.append(f"    mplusCap    = {mplus_cap},")
     out.append(f"    historyCap  = {history_cap},")
+    if tier_name:
+        out.append(f'    tierPreset  = "{_lua_escape(tier_name)}",')
+    if loot_min_ilvl:
+        out.append(f"    lootMinIlvl = {loot_min_ilvl},")
+    if history_days is not None:
+        out.append(f"    historyDays = {history_days},")
 
     # dataWarnings array — Lua side reads this to surface issues in the UI.
     if fetch_warnings:
@@ -282,6 +329,14 @@ def build_lua(
         out.append(f'        ["{_lua_escape(name)}"] = {{')
         out.append(f"            attendance    = {attendance},")
         out.append(f"            mplusDungeons = {mplus},")
+
+        # mainspec and role — only emit if present (convert-mode CSVs won't
+        # have these columns; that's fine, Scoring.lua treats absent = raider).
+        mainspec_val = row.get("mainspec")
+        role_val     = row.get("role", "raider")
+        if mainspec_val:
+            out.append(f'            mainspec      = "{_lua_escape(mainspec_val)}",')
+        out.append(f'            role          = "{_lua_escape(role_val)}",')
 
         bis_ids = bis.get(name) or []
         if bis_ids:
@@ -382,10 +437,54 @@ def _best_wishlist_score(item: dict) -> float:
     return float(best)
 
 
+def _mainspec_sim_score(item: dict, mainspec: str | None) -> float | None:
+    """Return the sim percentage for the character's main spec only.
+
+    Args:
+        item: A wishlist item dict as returned by the WoWAudit API.
+        mainspec: The spec name to match, e.g. ``"Holy"`` or ``"Protection"``.
+            Case-insensitive prefix match is used so ``"holy"`` matches
+            ``"Holy Paladin"`` if wowaudit ever returns a combined label.
+
+    Returns:
+        The percentage float for the matching spec, or ``None`` when the
+        spec is not found in ``score_by_spec``.  Returns ``None`` (not 0.0)
+        so callers can fall back to ``_best_wishlist_score`` rather than
+        silently scoring zero.
+    """
+    if not mainspec:
+        return None
+    sbs = item.get("score_by_spec")
+    if not isinstance(sbs, dict):
+        return None
+    target = mainspec.lower()
+    for spec_key, spec_data in sbs.items():
+        if not isinstance(spec_key, str):
+            continue
+        if spec_key.lower().startswith(target) or target.startswith(spec_key.lower()):
+            if isinstance(spec_data, dict):
+                p = spec_data.get("percentage")
+                if isinstance(p, (int, float)):
+                    return float(p)
+    return None
+
+
+# Determine role from WoWAudit member status.
+# "raider" / "trial" / "bench" are first-class; anything else
+# (social, unknown, absent) maps to "raider" as a safe default
+# so scoring is never accidentally suppressed for a real raider
+# whose API field uses an unfamiliar label.
+_ROLE_MAP = {
+    "trial": "trial",
+    "bench": "bench",
+}
+
+
 def fetch_rows(
     api_key: str,
     dump_dir: Path | None,
     use_cache: bool = False,
+    spec_aware: bool = True,
 ) -> tuple[list[dict], int, list[str]]:
     """Hit all wowaudit endpoints and merge into per-character row dicts.
 
@@ -502,6 +601,15 @@ def fetch_rows(
                 if isinstance(cid, int) and isinstance(done, list):
                     dungeons_by_id[cid] = dungeons_by_id.get(cid, 0) + len(done)
 
+    # Build mainspec lookup from roster so wishlist loop can use it.
+    mainspec_by_id: dict[int, str | None] = {}
+    for c in roster:
+        if isinstance(c, dict):
+            cid = c.get("id")
+            if isinstance(cid, int):
+                raw = c.get("main_spec") or ""
+                mainspec_by_id[cid] = raw.strip() or None
+
     # --- wishlists ---
     wl_payload = _fetch("/wishlists", "wishlists")
     wl_chars   = (
@@ -515,6 +623,7 @@ def fetch_rows(
         if not isinstance(cid, int):
             continue
         sims_by_id.setdefault(cid, {})
+        char_mainspec = mainspec_by_id.get(cid)
         for inst in c.get("instances") or []:
             for diff in inst.get("difficulties") or []:
                 wl = diff.get("wishlist") or {}
@@ -523,7 +632,12 @@ def fetch_rows(
                         iid = item.get("id")
                         if not isinstance(iid, int):
                             continue
-                        score = _best_wishlist_score(item)
+                        if spec_aware:
+                            score = _mainspec_sim_score(item, char_mainspec)
+                            if score is None:
+                                score = _best_wishlist_score(item)
+                        else:
+                            score = _best_wishlist_score(item)
                         # First sighting wins; later sightings only overwrite
                         # when strictly greater. This ensures a 0.0 result is
                         # recorded (so simsKnown picks it up downstream)
@@ -541,10 +655,13 @@ def fetch_rows(
         full = _full_name(c.get("name"), c.get("realm"))
         if not full:
             continue
+        raw_status  = c.get("status") or ""
         row: dict = {
             "character":      full,
             "mplus_dungeons": dungeons_by_id.get(cid, 0),
             "attendance":     attendance_by_id.get(cid, 0),
+            "role":           _ROLE_MAP.get(raw_status.lower(), "raider"),
+            "mainspec":       (c.get("main_spec") or "").strip() or None,
         }
         for iid, score in (sims_by_id.get(cid) or {}).items():
             row[f"sim_{iid}"] = score
@@ -751,11 +868,63 @@ def main():
     ap.add_argument("--mplus-cap-per-week", type=int, default=10,
                     help="Per-week increment for the auto M+ cap (default 10).")
     ap.add_argument("--history-cap", type=int,   default=5)
+    ap.add_argument(
+        "--tier",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Apply a named tier preset from tools/tiers/<NAME>.json. "
+            "Sets ilvlFloor, mplusCap, historyDays, softFloor, and optionally "
+            "bisPath. Example: --tier TWW-S3. "
+            "Explicit --mplus-cap / --history-cap / --loot-min-ilvl values "
+            "always override the preset."
+        ),
+    )
+    ap.add_argument(
+        "--loot-min-ilvl",
+        type=int,
+        default=None,
+        help=(
+            "Minimum item level for loot history entries. "
+            "Overrides the tier preset's ilvlFloor if both are specified."
+        ),
+    )
+    ap.add_argument(
+        "--no-spec-aware",
+        action="store_true",
+        default=False,
+        help=(
+            "Revert sim selection to max-across-all-specs (pre-2.1 behaviour). "
+            "Default is spec-aware: only the character's main spec's sim is used."
+        ),
+    )
     args = ap.parse_args()
+
+    # Apply tier preset (values are only used as defaults if the
+    # corresponding explicit CLI argument was not provided).
+    tier_preset: dict = {}
+    if args.tier is not None:
+        tier_preset = _load_tier_preset(args.tier)
+
+    def _preset(key: str, cli_val, default):
+        """Return cli_val if it was explicitly set, else preset value, else default."""
+        if cli_val is not None:
+            return cli_val
+        if key in tier_preset and tier_preset[key] is not None:
+            return tier_preset[key]
+        return default
+
+    # Resolve loot min ilvl (used later in main for the run report / Lua header).
+    loot_min_ilvl = _preset("ilvlFloor", args.loot_min_ilvl, 0)
+    # Resolve history days override.
+    history_days_override = _preset("historyDays", None, None)
+    # Resolve soft floor (history cap) — used as new default for history_cap.
+    soft_floor_override = _preset("softFloor", None, None)
 
     weeks_in_season = 1
     team_url = None
     fetch_warnings: list[str] = []
+    spec_aware = not args.no_spec_aware
     if args.wowaudit is not None:
         # Convert mode.
         if args.bis is None:
@@ -773,7 +942,8 @@ def main():
                 "to convert a manual export."
             )
         rows, weeks_in_season, fetch_warnings = fetch_rows(
-            args.api_key, args.dump_raw, use_cache=args.use_cache
+            args.api_key, args.dump_raw, use_cache=args.use_cache,
+            spec_aware=spec_aware,
         )
         team_url = fetch_team_url(args.api_key)
         if not rows and not fetch_warnings:
@@ -789,13 +959,26 @@ def main():
     if args.mplus_cap is not None:
         mplus_cap = args.mplus_cap
     else:
-        mplus_cap = max(args.mplus_cap_per_week,
-                        args.mplus_cap_per_week * max(weeks_in_season, 1))
+        preset_mplus = tier_preset.get("mplusCap")
+        if preset_mplus is not None:
+            mplus_cap = int(preset_mplus)
+        else:
+            mplus_cap = max(args.mplus_cap_per_week,
+                            args.mplus_cap_per_week * max(weeks_in_season, 1))
+
+    # History cap: use soft_floor_override from preset if no explicit --history-cap provided.
+    history_cap = args.history_cap
+    if soft_floor_override is not None and args.history_cap == 5:
+        # Only override the default (5) if the user didn't explicitly set it.
+        history_cap = int(soft_floor_override)
 
     try:
         lua = build_lua(
-            rows, bis, args.sim_cap, mplus_cap, args.history_cap,
+            rows, bis, args.sim_cap, mplus_cap, history_cap,
             team_url, fetch_warnings if not args.wowaudit else None,
+            loot_min_ilvl=loot_min_ilvl,
+            history_days=history_days_override,
+            tier_name=args.tier,
         )
     except ValueError as exc:
         sys.exit(str(exc))

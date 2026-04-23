@@ -134,6 +134,27 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
     local attVal,  attRaw  = attendanceComponent(char)
     local mpVal,   mpRaw   = mplusComponent(char, mplusCap)
 
+    -- Per-role history multiplier: trial/bench players have reduced history
+    -- influence so they don't score impossibly high due to zero history.
+    if histVal ~= nil then
+        local roleWeights = (profile.roleHistoryWeights) or {}
+        local charRole    = (char.role) or "raider"
+        local roleMult    = roleWeights[charRole]
+        if type(roleMult) == "number" then
+            -- Multiplier < 1 reduces influence; > 1 amplifies.
+            -- Clamp to [0, 2] to guard against accidental extreme values.
+            roleMult = math.max(0, math.min(2, roleMult))
+            -- The history component returns a 0..1 value where 1 = best
+            -- (no loot received). A trial raider with zero history gets
+            -- histVal=1.0 which scores perfectly. Multiplying by < 1
+            -- pulls their history value toward the mid-point (0.5).
+            -- Formula: 0.5 + (histVal - 0.5) * roleMult
+            -- When roleMult=1.0 this is a no-op.
+            histVal = 0.5 + (histVal - 0.5) * roleMult
+            histVal = math.max(0, math.min(1, histVal))
+        end
+    end
+
     local weights = profile.weights or {}
 
     -- If sim weighting is enabled but this candidate has no sim data
@@ -146,7 +167,8 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
     end
 
     local components = {
-        sim        = { value = simVal,  raw = simRaw,  reference = simReference },
+        sim        = { value = simVal,  raw = simRaw,  reference = simReference,
+                       mainspec = char.mainspec },
         bis        = { value = bisVal,  raw = bisRaw                            },
         history    = { value = histVal, raw = histRaw, cap = historyCap,
                        reference = historyReference,
@@ -166,6 +188,7 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
             breakdown[name] = {
                 value = c.value, raw = c.raw, cap = c.cap,
                 breakdown = c.breakdown, reference = c.reference, weight = w,
+                mainspec = c.mainspec,
             }
         end
     end

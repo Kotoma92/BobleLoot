@@ -790,6 +790,38 @@ function BuildTuningTab(parent)
         end,
     })
 
+    -- Role history weight multipliers (Batch 2.2).
+    -- Heading label.
+    local T = ns.Theme
+    local roleLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    roleLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -270)
+    roleLabel:SetText("Role history multipliers  (1.0 = full, 0.5 = half, 0.0 = none)")
+    roleLabel:SetTextColor(T.c.muted.r, T.c.muted.g, T.c.muted.b)
+
+    local ROLE_ROWS = {
+        { key = "raider", label = "Raider",  y = -286 },
+        { key = "trial",  label = "Trial",   y = -332 },
+        { key = "bench",  label = "Bench",   y = -378 },
+    }
+    for _, rr in ipairs(ROLE_ROWS) do
+        MakeSlider(inner, {
+            label      = rr.label,
+            min        = 0, max = 1, step = 0.05, isPercent = false,
+            width      = 220, x = 4, y = rr.y,
+            get = function()
+                local rw = addon and addon.db.profile.roleHistoryWeights
+                return (rw and rw[rr.key]) or 1.0
+            end,
+            set = function(v)
+                if addon then
+                    addon.db.profile.roleHistoryWeights = addon.db.profile.roleHistoryWeights or {}
+                    addon.db.profile.roleHistoryWeights[rr.key] = v
+                    ScheduleLootHistoryApply()
+                end
+            end,
+        })
+    end
+
     -- Refresh state on tab show.
     body:SetScript("OnShow", function()
         if not addon then return end
@@ -847,6 +879,27 @@ function BuildLootDBTab(parent)
             if not addon then return end
             addon.db.profile.lootMinIlvl = v
             ScheduleLootHistoryApply()
+        end,
+    })
+
+    -- Vault / BOE weight (reads from profile.vaultWeight, not lootWeights).
+    local vaultLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    vaultLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -192)
+    vaultLabel:SetText("Vault selections & BOE awards")
+    vaultLabel:SetTextColor(T.c.muted.r, T.c.muted.g, T.c.muted.b)
+
+    MakeSlider(inner, {
+        label = "Vault / BOE weight",
+        min = 0, max = 2, step = 0.1, isPercent = false,
+        width = 280, x = 4, y = -208,
+        get = function()
+            return (addon and addon.db.profile.vaultWeight) or 0.5
+        end,
+        set = function(v)
+            if addon then
+                addon.db.profile.vaultWeight = v
+                ScheduleLootHistoryApply()
+            end
         end,
     })
 

@@ -14,7 +14,7 @@ local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
-BobleLoot.version = "1.1.0"
+BobleLoot.version = "1.2.0-dev"
 
 local DB_DEFAULTS = {
     profile = {
@@ -30,6 +30,20 @@ local DB_DEFAULTS = {
             mainspec = 1.0,
             minor    = 0.5,
         },
+        -- Per-role history weight multiplier (2.2).
+        -- 1.0 = no adjustment, 0.5 = half influence, 0.0 = history excluded.
+        roleHistoryWeights = {
+            raider = 1.0,
+            trial  = 0.5,
+            bench  = 0.5,
+        },
+        -- Vault and BOE loot weight relative to a normal awarded drop (2.4).
+        vaultWeight = 0.5,
+        -- Vault selection entries stored as synthetic loot history (2.4).
+        vaultEntries = {},
+        -- Whether sim selection uses character's main spec (true) or max
+        -- across all specs (false). Default true per 2.1 design.
+        specAwareSimSelection = true,
         weights = {
             sim        = 0.40,
             bis        = 0.20,
@@ -80,9 +94,29 @@ function BobleLoot:OnEnable()
     if ns.MinimapButton and ns.MinimapButton.Setup then
         ns.MinimapButton:Setup(self)
     end
+    -- Great Vault collection tracking (Batch 2.4).
+    if C_WeeklyRewards then
+        self:RegisterEvent("WEEKLY_REWARDS_ITEM_GRABBED", "OnVaultItemGrabbed")
+    end
     -- Hook RCLootCouncil if present; otherwise wait for it to load.
     if not self:TryHookRC() then
         self:RegisterEvent("ADDON_LOADED", "OnAddonLoaded")
+    end
+end
+
+function BobleLoot:OnVaultItemGrabbed(event, itemLocation)
+    -- itemLocation is a C_Item.ItemLocation. Resolve name and ilvl.
+    local playerName = UnitName("player")
+    local realm      = GetRealmName and GetRealmName() or ""
+    realm = realm:gsub("%s+", "")
+    local fullName   = (playerName and realm ~= "") and (playerName .. "-" .. realm)
+                       or playerName or "Unknown"
+    local link  = (itemLocation and C_Item and C_Item.GetItemLink)
+                  and C_Item.GetItemLink(itemLocation) or nil
+    local ilvl  = (itemLocation and C_Item and C_Item.GetCurrentItemLevel)
+                  and C_Item.GetCurrentItemLevel(itemLocation) or nil
+    if ns.LootHistory and ns.LootHistory.RecordVaultSelection then
+        ns.LootHistory:RecordVaultSelection(self, fullName, link, ilvl)
     end
 end
 
