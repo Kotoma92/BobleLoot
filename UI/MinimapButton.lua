@@ -61,7 +61,7 @@ function MB:BuildTooltip(tt)
             math.floor(T.muted[1] * 255),
             math.floor(T.muted[2] * 255),
             math.floor(T.muted[3] * 255))
-            .. "Dataset: not loaded|r")
+            .. "No dataset loaded \xe2\x80\x94 run tools/wowaudit.py|r")
     else
         tt:AddDoubleLine("Dataset version:", data.generatedAt or "?",
             1, 1, 1,
