@@ -404,6 +404,24 @@ function BobleLoot:OnSlashCommand(input)
         if ns.RaidReminder and ns.RaidReminder.ForceCheck then
             ns.RaidReminder:ForceCheck(self)
         end
+    elseif input == "synthhistory" or input == "synth" then
+        -- Diagnostic: list synthetic loot entries from profile.synthHistory (roadmap 4.2).
+        local synth = self.db.profile.synthHistory or {}
+        if #synth == 0 then
+            self:Print("No synthetic loot entries recorded this session.")
+        else
+            self:Print(string.format("%d synthetic loot entr%s:",
+                #synth, #synth == 1 and "y" or "ies"))
+            for i, e in ipairs(synth) do
+                self:Print(string.format("  [%d] %s | %s | %s | w=%.2f | %s",
+                    i,
+                    e.name or "?",
+                    e.itemLink or tostring(e.itemID or "?"),
+                    e.synthType or "?",
+                    e.weight or 0,
+                    date("%Y-%m-%d %H:%M", e.t or 0)))
+            end
+        end
     elseif input == "lootdb" or input == "loothistory" then
         if ns.LootHistory then
             if ns.LootHistory.Diagnose then ns.LootHistory:Diagnose(self) end
@@ -611,6 +629,7 @@ function BobleLoot:OnSlashCommand(input)
     else
         self:Print("Commands: /bl config | /bl minimap | /bl version | /bl broadcast | " ..
             "/bl transparency on|off | /bl conflict <0-20> | /bl checkdata | /bl lootdb | " ..
+            "/bl synthhistory | /bl importpaste | " ..
             "/bl history | /bl benchscore [itemID] | " ..
             "/bl trust add|remove|list <Name-Realm> | " ..
             "/bl debugchar <Name-Realm> | /bl test [N] | " ..
