@@ -74,6 +74,12 @@ local DB_DEFAULTS = {
         minimap  = { hide = false, minimapPos = 220 },
         panelPos = { point = "CENTER", x = 0, y = 0 },
         lastTab  = "weights",
+        -- 3.8 score-trend tracking
+        trackTrends      = true,        -- leader-side toggle; non-leaders ignore
+        trendHistoryDays = 28,          -- rolling window kept in scoreHistory
+        scoreHistory     = {},          -- [charName] = { {ts,score,itemID}, ... }
+        -- 3.5 wasted-loot
+        wastedLootMap    = {},          -- [fingerprint] = true
     },
 }
 
