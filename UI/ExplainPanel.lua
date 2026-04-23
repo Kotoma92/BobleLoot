@@ -164,6 +164,73 @@ local function Populate(itemID, name, opts)
     _lastOpts   = opts
 
     local Th = T()
+
+    -- Build line list.
+    local lines = {}  -- each: { left=str, right=str|nil, lr=..., rr=..., rg=..., rb=... }
+
+    -- itemID = 0 (or nil) means no active voting session — give early guidance.
+    if not itemID or itemID == 0 then
+        if name then
+            lines[#lines+1] = {
+                left  = "|cff" .. hexColor(Th.white) .. name .. "|r",
+                right = "|cff" .. hexColor(Th.muted) .. "no item|r",
+            }
+        end
+        lines[#lines+1] = { left = "|cff444444" .. string.rep("\xe2\x80\x94", 28) .. "|r" }
+        lines[#lines+1] = {
+            left = "|cff" .. hexColor(Th.muted) .. "No scoring data for this item.|r"
+        }
+        lines[#lines+1] = {
+            left = "|cff666666Open a voting session in RC first,|r"
+        }
+        lines[#lines+1] = {
+            left = "|cff666666then use /bl explain <Name-Realm>.|r"
+        }
+        -- Skip to render; no score computation needed.
+        _chatExportStr = ""
+        -- Render lines.
+        frame._scrollChild:SetHeight(1)
+        for _, lf in ipairs(_contentLines or {}) do lf:Hide() end
+        _contentLines = _contentLines or {}
+        local lineH   = 14
+        local yOffset = 0
+        local childW  = FRAME_W - 30
+        for i, lineData in ipairs(lines) do
+            local lf = _contentLines[i]
+            if not lf then
+                lf = CreateFrame("Frame", nil, frame._scrollChild)
+                lf._left  = lf:CreateFontString(nil, "OVERLAY")
+                lf._left:SetFont(Th.fontBody, Th.sizeBody)
+                lf._left:SetJustifyH("LEFT")
+                lf._right = lf:CreateFontString(nil, "OVERLAY")
+                lf._right:SetFont(Th.fontBody, Th.sizeBody)
+                lf._right:SetJustifyH("RIGHT")
+                _contentLines[i] = lf
+            end
+            lf:SetWidth(childW)
+            lf:SetHeight(lineH)
+            lf:SetPoint("TOPLEFT", frame._scrollChild, "TOPLEFT", 6, -yOffset)
+            lf:Show()
+            lf._left:SetPoint("LEFT", lf, "LEFT", 0, 0)
+            lf._left:SetWidth(childW - 180)
+            lf._left:SetText(lineData.left or "")
+            lf._left:SetTextColor(1, 1, 1, 1)
+            if lineData.right then
+                lf._right:SetPoint("RIGHT", lf, "RIGHT", 0, 0)
+                lf._right:SetWidth(175)
+                lf._right:SetText(lineData.right)
+                lf._right:SetTextColor(1, 1, 1, 1)
+                lf._right:Show()
+            else
+                lf._right:SetText("")
+                lf._right:Hide()
+            end
+            yOffset = yOffset + lineH
+        end
+        frame._scrollChild:SetHeight(math.max(yOffset + 4, FRAME_H - TITLEBAR_H - 36))
+        return
+    end
+
     local inDs = false
     local score, breakdown
 
@@ -178,9 +245,6 @@ local function Populate(itemID, name, opts)
             historyReference = opts.historyReference,
         })
     end
-
-    -- Build line list.
-    local lines = {}  -- each: { left=str, right=str|nil, lr=..., rr=..., rg=..., rb=... }
 
     -- Title: name + score
     if name then
