@@ -30,6 +30,7 @@ local frame        -- the single toast frame
 local textLabel    -- FontString child of frame
 local holdTimer    -- C_Timer handle for the 3-second hold phase
 local addon        -- set in Setup
+local _toastLevel  -- "success"|"warning"|"error" — current or last shown level (4.11)
 
 local FRAME_W   = 280
 local FRAME_H   = 40
@@ -104,6 +105,7 @@ end
 function Toast:Show(message, level)
     BuildFrame()
     level = level or "success"
+    _toastLevel = level  -- 4.11: track for live stripe update on color-mode change
     local colorFn = LEVEL_COLOR[level] or LEVEL_COLOR.success
     local col = colorFn()
 
@@ -187,4 +189,28 @@ function Toast:Setup(addonArg)
     addon:RegisterMessage("BobleLoot_ImportResult", function(_, ok, msg)
         Toast:Show(msg or "Import result unknown.", ok and "success" or "error")
     end)
+
+    -- 4.10: show a toast once per session if RC is missing at startup.
+    -- The 10-second timer in Core.lua fires BobleLoot_RCMissing via AceEvent.
+    local _rcMissingToastShown = false
+    addonArg:RegisterMessage("BobleLoot_RCMissing", function()
+        if not _rcMissingToastShown then
+            _rcMissingToastShown = true
+            Toast:Show("RCLootCouncil not detected \xe2\x80\x94 score column unavailable.", "error")
+        end
+    end)
+
+    -- 4.11: update live toast stripe color when the color mode changes.
+    if ns.Theme and ns.Theme.RegisterColorModeConsumer then
+        ns.Theme:RegisterColorModeConsumer(function()
+            -- If a toast is currently visible, update its stripe to match new palette.
+            if frame and frame:IsShown() and _toastLevel then
+                local col = (T and T[_toastLevel == "error" and "danger" or _toastLevel])
+                            or (T and T.warning)
+                if col and frame._stripe then
+                    frame._stripe:SetColorTexture(col[1], col[2], col[3], 1)
+                end
+            end
+        end)
+    end
 end

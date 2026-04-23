@@ -361,6 +361,16 @@ function LF:Hook(addon, RC)
 
     -- Also do an initial pass in case the frame is already up.
     refreshAll(addon, lootFrame)
+
+    -- 4.11: re-render the transparency label when the color mode changes.
+    if ns.Theme and ns.Theme.RegisterColorModeConsumer then
+        ns.Theme:RegisterColorModeConsumer(function()
+            if ns.LootFrame and ns.LootFrame.Refresh then
+                pcall(function() ns.LootFrame:Refresh() end)
+            end
+        end)
+    end
+
     return true
 end
 

@@ -682,6 +682,15 @@ function BuildWeightsTab(parent)
             .. table.concat(parts, "  "))
     end
 
+    -- 4.11: re-run example row when color mode changes.
+    if ns.Theme and ns.Theme.RegisterColorModeConsumer then
+        ns.Theme:RegisterColorModeConsumer(function()
+            if activeTab == "weights" then
+                refreshExampleRow()
+            end
+        end)
+    end
+
     -- Refresh on tab show.
     body:SetScript("OnShow", function()
         if not addon then return end

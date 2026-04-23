@@ -329,6 +329,20 @@ end
 
 function CP:Setup(addon)
     _addon = addon
+
+    -- 4.11: redraw bars when the color mode changes.
+    if ns.Theme and ns.Theme.RegisterColorModeConsumer then
+        ns.Theme:RegisterColorModeConsumer(function()
+            if ns.ComparePopout and ns.ComparePopout.IsShown
+                and ns.ComparePopout:IsShown() then
+                if ns.ComparePopout._lastArgs then
+                    pcall(function()
+                        ns.ComparePopout:Open(table.unpack(ns.ComparePopout._lastArgs))
+                    end)
+                end
+            end
+        end)
+    end
 end
 
 function CP:Close()
@@ -340,6 +354,9 @@ function CP:IsShown()
 end
 
 function CP:Open(nameA, nameB, itemID, itemLink, opts)
+    -- 4.11: persist arguments so the color-mode consumer can redraw on mode change.
+    CP._lastArgs = { nameA, nameB, itemID, itemLink, opts }
+
     BuildFrame()
     if not _frame then return end  -- Theme nil guard fired
 

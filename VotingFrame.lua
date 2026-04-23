@@ -521,6 +521,29 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
 
     cellFrame.text:SetText(formatScore(score, inDs, median, max, conflict))
 
+    -- 4.11: High Contrast mode — fill cell background and render text white.
+    -- c is the computed color from ScoreColorRelative/ScoreColor (may be nil if no score).
+    local c = (score ~= nil and ns.Theme)
+              and ((ns.Theme.ScoreColorRelative
+                    and ns.Theme.ScoreColorRelative(score, median, max))
+                   or (ns.Theme.ScoreColor and ns.Theme.ScoreColor(score)))
+    if ns.Theme and ns.Theme.hcMode and c then
+        -- Fill the cell background with the score color.
+        if cellFrame.SetBackdropColor then
+            cellFrame:SetBackdropColor(c[1], c[2], c[3], 0.85)
+        end
+        -- Render text as white — must use a plain (non-escape) string so
+        -- the inline escape code from formatScore does not override the color.
+        if score ~= nil then
+            local prefix = conflict and "~" or ""
+            cellFrame.text:SetText(prefix .. tostring(math.floor(score + 0.5)))
+        end
+        cellFrame.text:SetTextColor(1, 1, 1, 1)
+    elseif cellFrame.SetBackdropColor then
+        -- Restore transparent background when not in HC mode.
+        cellFrame:SetBackdropColor(0, 0, 0, 0)
+    end
+
     -- If we're the leader (and transparency is on so it matters),
     -- broadcast authoritative scores for every candidate so raiders see
     -- exactly what we see. Throttled inside Sync:SendScores.
@@ -932,6 +955,20 @@ function VF:Hook(addon, RC)
     if type(rcVoting.CloseFrame) == "function" then
         hooksecurefunc(rcVoting, "CloseFrame", function()
             _noteWrittenForSession = {}
+        end)
+    end
+
+    -- 4.11: re-render all visible score cells when the color mode changes.
+    if ns.Theme and ns.Theme.RegisterColorModeConsumer then
+        ns.Theme:RegisterColorModeConsumer(function()
+            -- Invalidate _sessionStats cache so doCellUpdate recomputes colors on next render.
+            _sessionStats = {}
+            -- For immediate visual update if the voting frame is currently visible:
+            if rcVoting and rcVoting.frame and rcVoting.frame:IsShown() then
+                if rcVoting.scrollTable and rcVoting.scrollTable.Refresh then
+                    pcall(function() rcVoting.scrollTable:Refresh() end)
+                end
+            end
         end)
     end
 
