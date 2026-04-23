@@ -405,6 +405,12 @@ function Sync:_recordWarning(sender, reason)
     while #self._warnings > WARNINGS_MAX do
         table.remove(self._warnings, 1)
     end
+    -- Notify the toast system (plan 3.12) if the addon reference is set.
+    -- Sync._addonRef is set by Sync:Setup (Batch 2C / plan 3E contract).
+    -- Guard for nil safety so this is safe regardless of load order.
+    if self._addonRef and self._addonRef.SendMessage then
+        self._addonRef:SendMessage("BobleLoot_SyncWarning", sender, reason)
+    end
 end
 
 --- Returns the most recent sync warnings (up to 20), newest last.
