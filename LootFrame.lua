@@ -134,6 +134,15 @@ local function attachLabel(entryFrame)
             GameTooltip:Show()
             return
         end
+        if ctx.noComponents then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine("|cffddddddBoble Loot|r")
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("|cffaaaaaa No scoring data for this item.|r")
+            GameTooltip:AddLine("|cff888888All score components returned no data.|r")
+            GameTooltip:Show()
+            return
+        end
         if not ctx.score then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 
@@ -281,8 +290,11 @@ local function renderEntry(addon, entry, entryFrame)
     end
 
     if not score then
-        fs:SetText("")
-        entryFrame[SCORE_FRAME_KEY .. "_ctx"] = nil
+        -- Player is in dataset but all scoring components returned nil.
+        local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
+        fs:SetTextColor(m[1], m[2], m[3])
+        fs:SetText("BL: ?")
+        entryFrame[SCORE_FRAME_KEY .. "_ctx"] = { noComponents = true }
         return
     end
 
