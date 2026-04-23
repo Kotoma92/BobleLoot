@@ -37,6 +37,12 @@ local DEFAULT_MIN_ILVL = 0
 
 -- Try every plausible field RC has used to record an awarded item's
 -- ilvl. Falls back to parsing the link via GetDetailedItemLevelInfo.
+-- NOTE (Batch 4C): The resolver equivalent for this function is
+-- ns.RCCompat:GetResolver().lootEntryIlvl. LootHistory.lua retains its
+-- own inline fallback chain because it runs before VotingFrame/LootFrame
+-- hooks are established and operates on the SavedVariables DB rather than
+-- live session data. If RC changes its ilvl field name in a future major
+-- version, update both here and in RESOLVER_MATRIX (RCCompat.lua).
 local function entryItemLevel(entry)
     local v = entry.ilvl or entry.itemLevel or entry.iLvl or entry.lvl
     if type(v) == "number" and v > 0 then return v end
@@ -191,6 +197,8 @@ end
 
 -- RC entries store time as either a Unix timestamp (number) or a "date"
 -- string like "12/04/26" / "2026-04-12 19:30:00". Try a few shapes.
+-- NOTE (Batch 4C): Resolver equivalent: ns.RCCompat:GetResolver().lootEntryTimestamp.
+-- Kept in sync with RCCompat.lua RESOLVER_MATRIX manually.
 local function entryTime(entry)
     local t = entry.time or entry.timestamp
     if type(t) == "number" then return t end
