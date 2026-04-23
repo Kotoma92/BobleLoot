@@ -882,6 +882,27 @@ function BuildLootDBTab(parent)
         end,
     })
 
+    -- Vault / BOE weight (reads from profile.vaultWeight, not lootWeights).
+    local vaultLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    vaultLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -192)
+    vaultLabel:SetText("Vault selections & BOE awards")
+    vaultLabel:SetTextColor(T.c.muted.r, T.c.muted.g, T.c.muted.b)
+
+    MakeSlider(inner, {
+        label = "Vault / BOE weight",
+        min = 0, max = 2, step = 0.1, isPercent = false,
+        width = 280, x = 4, y = -208,
+        get = function()
+            return (addon and addon.db.profile.vaultWeight) or 0.5
+        end,
+        set = function(v)
+            if addon then
+                addon.db.profile.vaultWeight = v
+                ScheduleLootHistoryApply()
+            end
+        end,
+    })
+
     -- Status line.
     local statusCard, statusInner = MakeSection(body, "Loot history status")
     statusCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 104)
