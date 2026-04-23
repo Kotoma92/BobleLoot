@@ -32,7 +32,7 @@ local LH = {}
 ns.LootHistory = LH
 
 local DEFAULT_DAYS    = 28
-local DEFAULT_WEIGHTS = { bis = 1.5, major = 1.0, mainspec = 1.0, minor = 0.5 }
+local DEFAULT_WEIGHTS = { bis = 1.5, major = 1.0, mainspec = 1.0, minor = 0.5, vault = 0.5 }
 local DEFAULT_MIN_ILVL = 0
 
 -- Try every plausible field RC has used to record an awarded item's
@@ -73,6 +73,10 @@ local CATEGORY_PATTERNS = {
     { key = "minor",    patterns = { "minor", "small upgrade" } },
     { key = "mainspec", patterns = { "mainspec", "main%-spec", "main spec",
                                      "need", "upgrade" } },
+    -- BOE distributions are tracked as "vault" category (same weight,
+    -- configurable). Tested after the normal upgrade categories so a
+    -- response of "Major upgrade (BOE)" still reads as "major".
+    { key = "vault",    patterns = { "boe", "bind on equip", "bind%-on%-equip" } },
 }
 
 -- Numeric response IDs only used as a fallback when the entry has no
@@ -211,6 +215,8 @@ local function effectiveWeights(profile)
         major    = w.major    or DEFAULT_WEIGHTS.major,
         mainspec = w.mainspec or DEFAULT_WEIGHTS.mainspec,
         minor    = w.minor    or DEFAULT_WEIGHTS.minor,
+        vault    = (profile.vaultWeight ~= nil) and profile.vaultWeight
+                   or DEFAULT_WEIGHTS.vault,
     }
 end
 
@@ -225,7 +231,7 @@ function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl)
     if type(rcLootDB) ~= "table" then return result end
     for name, entries in pairs(rcLootDB) do
         if type(entries) == "table" then
-            local row = { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0 } }
+            local row = { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0, vault = 0 } }
             for _, e in ipairs(entries) do
                 if type(e) == "table" then
                     local cat = classify(e)
