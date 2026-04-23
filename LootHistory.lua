@@ -412,10 +412,37 @@ function LH:DetectSchemaVersion(db, addon)
     return verdict
 end
 
+-- Shared helper: merge synthHistory entries into a result table.
+-- Called by both CountItemsReceived (sync) and LH:Apply (via the same sync path).
+-- NOTE: ilvl filtering is skipped for synthetic entries because querying item
+-- level without an async API call is not reliable. Time-window still applies.
+local function mergeSynthEntries(result, synthEntries, cutoff)
+    if type(synthEntries) ~= "table" then return end
+    for _, e in ipairs(synthEntries) do
+        if type(e) == "table" and type(e.name) == "string" then
+            local t = e.t
+            local timeOk = (not cutoff) or (not t) or t >= cutoff
+            if timeOk then
+                local row = result[e.name]
+                if not row then
+                    row = { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0, vault = 0 } }
+                    result[e.name] = row
+                end
+                -- Synthetic entries carry their own pre-computed weight.
+                row.total = row.total + (e.weight or 0.75)
+                local cat = e.synthType or "mainspec"
+                row.counts[cat] = (row.counts[cat] or 0) + 1
+            end
+        end
+    end
+end
+
 -- Build name -> { total = weighted sum, counts = {bis=N, major=N, ...} }
 -- profile (6th param) is used for wasted-loot filtering (3.5). When nil,
 -- wasted-loot checks are skipped (backward compat with any ad-hoc callers).
-function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, profile)
+-- synthEntries (7th param) is optional: list of { name, itemID, itemLink, t, synthType, weight }
+-- for catalyst/tier-token synthetic entries (roadmap 4.2).
+function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, profile, synthEntries)
     local cutoff = nil
     if days and days > 0 then
         cutoff = time() - days * 24 * 3600
@@ -479,6 +506,8 @@ function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, p
             result[name] = row
         end
     end
+    -- Merge catalyst / tier-token synthetic entries (roadmap 4.2).
+    mergeSynthEntries(result, synthEntries, cutoff)
     return result
 end
 
@@ -517,7 +546,8 @@ function LH:Apply(addon)
     local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
     local weights = effectiveWeights(profile)
     local rows    = self:CountItemsReceived(db, days, weights, minIlvl,
-                                            profile.vaultEntries or {}, profile)
+                                            profile.vaultEntries or {}, profile,
+                                            profile.synthHistory or {})
     local matched, scanned = 0, 0
     for name, _ in pairs(rows) do scanned = scanned + 1 end
     for name, char in pairs(data.characters) do
@@ -538,6 +568,17 @@ end
 
 -- Diagnostic helper used by /bl lootdb.
 function LH:Diagnose(addon)
+    -- Synthetic history summary (4.2).
+    local synth = addon.db.profile.synthHistory or {}
+    addon:Print(string.format("Synthetic history entries: %d", #synth))
+    for i, e in ipairs(synth) do
+        if i > 10 then addon:Print("  (truncated at 10)"); break end
+        addon:Print(string.format("  [%d] %s | %s | w=%.2f | %s",
+            i, e.name or "?", e.synthType or "?",
+            e.weight or 0,
+            date("%Y-%m-%d", e.t or 0)))
+    end
+
     local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
     local db, source = getRCLootDB(RC)
     addon:Print("Loot history source: " .. (source or "?"))
