@@ -414,10 +414,22 @@ def _mainspec_sim_score(item: dict, mainspec: str | None) -> float | None:
     return None
 
 
+# Determine role from WoWAudit member status.
+# "raider" / "trial" / "bench" are first-class; anything else
+# (social, unknown, absent) maps to "raider" as a safe default
+# so scoring is never accidentally suppressed for a real raider
+# whose API field uses an unfamiliar label.
+_ROLE_MAP = {
+    "trial": "trial",
+    "bench": "bench",
+}
+
+
 def fetch_rows(
     api_key: str,
     dump_dir: Path | None,
     use_cache: bool = False,
+    spec_aware: bool = True,
 ) -> tuple[list[dict], int, list[str]]:
     """Hit all wowaudit endpoints and merge into per-character row dicts.
 
@@ -534,6 +546,15 @@ def fetch_rows(
                 if isinstance(cid, int) and isinstance(done, list):
                     dungeons_by_id[cid] = dungeons_by_id.get(cid, 0) + len(done)
 
+    # Build mainspec lookup from roster so wishlist loop can use it.
+    mainspec_by_id: dict[int, str | None] = {}
+    for c in roster:
+        if isinstance(c, dict):
+            cid = c.get("id")
+            if isinstance(cid, int):
+                raw = c.get("main_spec") or ""
+                mainspec_by_id[cid] = raw.strip() or None
+
     # --- wishlists ---
     wl_payload = _fetch("/wishlists", "wishlists")
     wl_chars   = (
@@ -547,6 +568,7 @@ def fetch_rows(
         if not isinstance(cid, int):
             continue
         sims_by_id.setdefault(cid, {})
+        char_mainspec = mainspec_by_id.get(cid)
         for inst in c.get("instances") or []:
             for diff in inst.get("difficulties") or []:
                 wl = diff.get("wishlist") or {}
@@ -555,7 +577,12 @@ def fetch_rows(
                         iid = item.get("id")
                         if not isinstance(iid, int):
                             continue
-                        score = _best_wishlist_score(item)
+                        if spec_aware:
+                            score = _mainspec_sim_score(item, char_mainspec)
+                            if score is None:
+                                score = _best_wishlist_score(item)
+                        else:
+                            score = _best_wishlist_score(item)
                         # First sighting wins; later sightings only overwrite
                         # when strictly greater. This ensures a 0.0 result is
                         # recorded (so simsKnown picks it up downstream)
@@ -573,10 +600,13 @@ def fetch_rows(
         full = _full_name(c.get("name"), c.get("realm"))
         if not full:
             continue
+        raw_status  = c.get("status") or ""
         row: dict = {
             "character":      full,
             "mplus_dungeons": dungeons_by_id.get(cid, 0),
             "attendance":     attendance_by_id.get(cid, 0),
+            "role":           _ROLE_MAP.get(raw_status.lower(), "raider"),
+            "mainspec":       (c.get("main_spec") or "").strip() or None,
         }
         for iid, score in (sims_by_id.get(cid) or {}).items():
             row[f"sim_{iid}"] = score

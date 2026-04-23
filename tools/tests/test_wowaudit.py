@@ -762,3 +762,66 @@ def test_mainspec_sim_score_prefix_match():
     """'Holy Paladin' as key is matched by mainspec='Holy'."""
     item = {"score_by_spec": {"Holy Paladin": {"percentage": 5.5}}}
     assert wa._mainspec_sim_score(item, "Holy") == 5.5
+
+
+# ---------------------------------------------------------------------------
+# Task 2A-2 — mainspec / role extraction from roster
+# ---------------------------------------------------------------------------
+
+def test_fetch_rows_extracts_mainspec_and_role(monkeypatch):
+    def fake_http(path, key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            return _fixture("characters_with_spec.json")
+        if "/attendance" in path:
+            return _fixture("attendance.json")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            return {"characters": []}
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http)
+    monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, _, _ = wa.fetch_rows("key", None)
+    by_name = {r["character"]: r for r in rows}
+
+    assert by_name["Boble-Stormrage"]["mainspec"] == "Holy"
+    assert by_name["Boble-Stormrage"]["role"]     == "raider"
+    assert by_name["Kotoma-TwistingNether"]["mainspec"] == "Protection"
+    assert by_name["Kotoma-TwistingNether"]["role"]     == "trial"
+    assert by_name["Benchman-Stormrage"]["role"]        == "bench"
+
+
+def test_fetch_rows_missing_spec_gives_none(monkeypatch):
+    def fake_http(path, key):
+        if path == "/period":
+            return _fixture("period.json")
+        if "/characters" in path:
+            return _fixture("characters_with_spec.json")
+        if "/attendance" in path:
+            return _fixture("attendance.json")
+        if "/historical_data" in path:
+            return {"characters": []}
+        if "/wishlists" in path:
+            return {"characters": []}
+        return {}
+
+    monkeypatch.setattr(wa, "http_get_json", fake_http)
+    monkeypatch.setattr(wa, "_read_cache",  lambda _: None)
+    monkeypatch.setattr(wa, "_write_cache", lambda *_: None)
+
+    rows, _, _ = wa.fetch_rows("key", None)
+    by_name = {r["character"]: r for r in rows}
+    # NoSpec character has no main_spec field
+    assert by_name["NoSpec-Stormrage"]["mainspec"] is None
+    assert by_name["NoSpec-Stormrage"]["role"] == "raider"
+
+
+def test_role_map_unknown_status_defaults_to_raider():
+    """An unrecognised status string maps to 'raider', not 'trial' or 'bench'."""
+    assert wa._ROLE_MAP.get("social", "raider") == "raider"
+    assert wa._ROLE_MAP.get("", "raider")        == "raider"
