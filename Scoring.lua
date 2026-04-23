@@ -123,6 +123,19 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
     local char = data.characters[candidateName]
     if not char then return nil end
 
+    -- item 4.7: scoreOverrides short-circuit.
+    -- If the data file carries a fixed score for this item, return it
+    -- directly without running the formula. No in-game editor; the
+    -- override table is maintained in tools/score-overrides.json.
+    if data.scoreOverrides then
+        local overrideScore = data.scoreOverrides[itemID]
+        if type(overrideScore) == "number" then
+            -- Return score + minimal breakdown so callers that unpack
+            -- two values (score, breakdown) do not error.
+            return overrideScore, { _override = true }
+        end
+    end
+
     local mplusCap   = (profile.overrideCaps and profile.mplusCap)   or data.mplusCap   or 40
     local historyCap = (profile.overrideCaps and profile.historyCap) or data.historyCap or 5
     local simReference     = opts and opts.simReference      -- max sim pct across bidders
