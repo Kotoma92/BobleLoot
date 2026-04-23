@@ -15,6 +15,7 @@ ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
 BobleLoot.version = "2.0.0-dev"
+BobleLoot._rcHooked = false   -- set true when TryHookRC succeeds (4.10)
 
 -- Pending awards: { [fingerprint] = { name, itemID, ts } }
 -- Populated by LH:RegisterPendingAward (called from LH:Setup event handlers).
@@ -217,6 +218,13 @@ function BobleLoot:OnEnable()
     if not self:TryHookRC() then
         self:RegisterEvent("ADDON_LOADED", "OnAddonLoaded")
     end
+
+    -- 4.10: after 10-second grace period, warn UI if RC never loaded.
+    C_Timer.After(10, function()
+        if not BobleLoot._rcHooked then
+            BobleLoot:SendMessage("BobleLoot_RCMissing")
+        end
+    end)
 end
 
 function BobleLoot:OnVaultItemGrabbed(event, itemLocation)
@@ -307,6 +315,8 @@ function BobleLoot:OnAddonLoaded(_, name)
     if name == "RCLootCouncil" then
         if self:TryHookRC() then
             self:UnregisterEvent("ADDON_LOADED")
+            -- 4.10: inform banner to auto-hide.
+            self:SendMessage("BobleLoot_RCDetected")
         end
     end
 end
@@ -332,6 +342,9 @@ function BobleLoot:TryHookRC()
     end
     if ns.LootFrame and ns.LootFrame.Hook then
         if ns.LootFrame:Hook(self, RC) then hookedAny = true end
+    end
+    if hookedAny then
+        BobleLoot._rcHooked = true
     end
     return hookedAny
 end
