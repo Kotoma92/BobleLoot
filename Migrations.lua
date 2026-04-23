@@ -64,6 +64,29 @@ Migrations.list = {
             end
         end,
     },
+    -- v2: Initialise 3.5 wastedLootMap and 3.8 scoreHistory/trend keys.
+    -- Safe to run on any profile version < 2; idempotent because we only
+    -- set keys that are nil (AceDB will have supplied defaults on fresh
+    -- installs, but old installs pre-3B won't have them).
+    {
+        version = 2,
+        up = function(profile)
+            if profile.scoreHistory == nil then
+                profile.scoreHistory = {}
+            end
+            if profile.wastedLootMap == nil then
+                profile.wastedLootMap = {}
+            end
+            if profile.trackTrends == nil then
+                profile.trackTrends = true
+            end
+            if profile.trendHistoryDays == nil then
+                profile.trendHistoryDays = 28
+            end
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "|cffffcc00BobleLoot migration v2:|r initialised scoreHistory and wastedLootMap.")
+        end,
+    },
 }
 
 ----------------------------------------------------------------------------
