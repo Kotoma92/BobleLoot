@@ -200,6 +200,42 @@ local function decodeData(payload)
     return data, serialized
 end
 
+--- Slice an encoded payload string into ordered chunks of at most CHUNK_SIZE bytes.
+-- @param encoded  string  Full WoWAddonChannel-encoded payload (output of encodeData).
+-- @return         table   Sequence { [1]=str, [2]=str, ... }; at least one entry.
+local function encodeChunks(encoded)
+    local chunks = {}
+    local len = #encoded
+    if len == 0 then
+        chunks[1] = ""
+        return chunks
+    end
+    local pos = 1
+    while pos <= len do
+        local slice = encoded:sub(pos, pos + CHUNK_SIZE - 1)
+        chunks[#chunks + 1] = slice
+        pos = pos + CHUNK_SIZE
+    end
+    return chunks
+end
+
+--- Reassemble a chunks table (sparse [seq]=str) into the full encoded payload.
+-- Assumes all seq 1..total are present (caller verifies before calling).
+-- chunks is a [seq] = string sparse array — only numeric keys are written
+-- during accumulation (entry.chunks[seq] = chunk with numeric seq), so there
+-- is no risk of mixed-key tables here.
+-- @param chunks  table   { [1]=str, ..., [total]=str }
+-- @param total   number  Expected chunk count.
+-- @return        string  Concatenated payload, or nil if any seq is missing.
+local function reassembleChunks(chunks, total)
+    local parts = {}
+    for i = 1, total do
+        if not chunks[i] then return nil end
+        parts[i] = chunks[i]
+    end
+    return table.concat(parts)
+end
+
 ----------------------------------------------------------------------------
 -- send wrappers
 ----------------------------------------------------------------------------
