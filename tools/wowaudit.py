@@ -715,6 +715,89 @@ def build_lua(
     return "\n".join(out)
 
 # --------------------------------------------------------------------------
+# Export bundle (roadmap 4.3)
+# --------------------------------------------------------------------------
+
+def export_bundle(
+    rows: list[dict],
+    bis: dict[str, list[int]],
+    sim_cap: float,
+    mplus_cap: int,
+    history_cap: int,
+    team_url: str | None = None,
+    weights: dict | None = None,
+) -> dict:
+    """Build and return the portable export bundle as a Python dict.
+
+    Args:
+        rows:         Same row list used by build_lua().
+        bis:          BiS mapping {name: [itemIDs]}.
+        sim_cap:      Sim cap value used in this run.
+        mplus_cap:    M+ cap value used in this run.
+        history_cap:  History cap value used in this run.
+        team_url:     Optional wowaudit team URL.
+        weights:      Optional scoring weights dict (sim/bis/history/attendance/mplus).
+                      If None, the BobleLoot defaults are used.
+
+    Returns:
+        A dict suitable for json.dumps() matching the bobleloot-export-v1 schema.
+    """
+    now_iso = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    default_weights = {
+        "sim": 0.40, "bis": 0.20, "history": 0.15,
+        "attendance": 0.15, "mplus": 0.10,
+    }
+
+    sim_cols_set: set[str] = set()
+    for r in rows:
+        for c in r.keys():
+            if c.startswith("sim_") and c[4:].isdigit():
+                sim_cols_set.add(c)
+
+    characters: dict = {}
+    for row in rows:
+        name = (row.get("character") or "").strip()
+        if not name:
+            continue
+        bis_ids = bis.get(name) or []
+        sims: dict[int, float] = {}
+        for col in sim_cols_set:
+            val_raw = row.get(col)
+            if val_raw not in (None, ""):
+                val = _to_float(val_raw, default=None)
+                if val is not None:
+                    sims[int(col[4:])] = val
+        char: dict = {
+            "attendance":    _to_float(row.get("attendance")),
+            "mplusDungeons": _to_int(row.get("mplus_dungeons")),
+            "bis":           [int(i) for i in bis_ids],
+            "sims":          sims,
+        }
+        if row.get("mainspec"):
+            char["mainspec"] = str(row["mainspec"])
+        if row.get("role"):
+            char["role"] = str(row["role"])
+        characters[name] = char
+
+    bundle = {
+        "schema":        "bobleloot-export-v1",
+        "exportedAt":    now_iso,
+        "generatedAt":   now_iso,
+        "scoringConfig": {
+            "simCap":     sim_cap,
+            "mplusCap":   mplus_cap,
+            "historyCap": history_cap,
+            "weights":    weights or default_weights,
+        },
+        "characters":    characters,
+    }
+    if team_url:
+        bundle["teamUrl"] = team_url
+    return bundle
+
+
+# --------------------------------------------------------------------------
 # API fetch
 # --------------------------------------------------------------------------
 
@@ -1309,6 +1392,16 @@ def main():
             "Format: {'itemID': float}."
         ),
     )
+    ap.add_argument(
+        "--export",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "After building, write a portable JSON bundle to PATH "
+            "(no API key embedded). Use /bl importpaste in-game to load it."
+        ),
+    )
     args = ap.parse_args()
 
     # Apply tier preset (values are only used as defaults if the
@@ -1465,6 +1558,23 @@ def main():
     print(f"Wrote {args.out}: {len(rows)} characters, "
           f"{sum(len(v) for v in bis.values())} BiS entries. "
           f"M+ cap = {mplus_cap} ({weeks_in_season} week(s) into season).")
+
+    # Export bundle (roadmap 4.3): --export writes a portable JSON bundle.
+    if args.export is not None:
+        bundle = export_bundle(
+            rows, bis,
+            sim_cap=args.sim_cap,
+            mplus_cap=mplus_cap,
+            history_cap=history_cap,
+            team_url=team_url,
+        )
+        args.export.parent.mkdir(parents=True, exist_ok=True)
+        args.export.write_text(
+            json.dumps(bundle, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"Exported bundle to {args.export}: "
+              f"{len(bundle['characters'])} characters.")
 
 
 if __name__ == "__main__":
