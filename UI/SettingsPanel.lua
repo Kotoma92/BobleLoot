@@ -1055,6 +1055,75 @@ function BuildDataTab(parent)
     body:Hide()
     tabBodies["data"] = body
 
+    -- ── RC schema warning banner ──────────────────────────────────────
+    -- Visible only when rcSchemaDetected.status ~= "ok".
+    -- Reads the stored verdict written by LootHistory:DetectSchemaVersion.
+
+    local POPUP_SCHEMA_DETAIL = "BOBLELOOT_SCHEMA_DRIFT_DETAIL"
+
+    local schemaCard, schemaInner = MakeSection(body, "RCLootCouncil compatibility")
+    schemaCard:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
+    schemaCard:SetPoint("TOPRIGHT",    body, "TOPRIGHT", -6, -6)
+    schemaCard:SetHeight(52)
+    schemaCard:Hide()  -- shown conditionally in OnShow
+
+    local schemaLbl = schemaInner:CreateFontString(nil, "OVERLAY")
+    schemaLbl:SetFont(T.fontBody, T.sizeBody)
+    schemaLbl:SetPoint("TOPLEFT", schemaInner, "TOPLEFT", 4, -2)
+    schemaLbl:SetWidth(380)
+    schemaLbl:SetText(
+        "RCLootCouncil schema mismatch \xe2\x80\x94 history may be incomplete. "
+        .. "Run |cffffffff/bl lootdb|r for details.")
+
+    local schemaDetailBtn = MakeButton(schemaInner, "View details",
+        function()
+            if not StaticPopupDialogs[POPUP_SCHEMA_DETAIL] then
+                StaticPopupDialogs[POPUP_SCHEMA_DETAIL] = {
+                    text         = "RC schema drift detail (Ctrl+C to copy):",
+                    button1      = OKAY,
+                    hasEditBox   = true,
+                    editBoxWidth = 420,
+                    OnShow = function(self)
+                        local v2 = addon and addon.db
+                                   and addon.db.profile
+                                   and addon.db.profile.rcSchemaDetected
+                        local l2 = {}
+                        if v2 then
+                            l2[#l2+1] = string.format(
+                                "Status: %s  |  Check #%d  |  RC v%s",
+                                v2.status, v2.version or 0, v2.rcVersion or "?")
+                            l2[#l2+1] = string.format(
+                                "Checked: %s",
+                                v2.checkedAt and date("%Y-%m-%d %H:%M:%S", v2.checkedAt) or "?")
+                            l2[#l2+1] = "Source: " .. (v2.sourceUsed or "?")
+                            if v2.missingFields and #v2.missingFields > 0 then
+                                l2[#l2+1] = "Missing field groups:"
+                                for _, f in ipairs(v2.missingFields) do
+                                    l2[#l2+1] = "  - " .. f end
+                            else
+                                l2[#l2+1] = "All expected field groups confirmed present."
+                            end
+                        else
+                            l2[#l2+1] = "No detection result stored. Run /bl lootdb."
+                        end
+                        local eb = self.editBox or self.EditBox
+                        if eb then
+                            eb:SetText(table.concat(l2, "\n"))
+                            eb:SetFocus()
+                            eb:HighlightText()
+                        end
+                    end,
+                    EditBoxOnEnterPressed  = function(self) self:GetParent():Hide() end,
+                    EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+                    timeout      = 0,
+                    whileDead    = true,
+                    hideOnEscape = true,
+                    preferredIndex = 3,
+                }
+            end
+            StaticPopup_Show(POPUP_SCHEMA_DETAIL)
+        end, { width = 100, height = 20, x = 388, y = -4 })
+
     -- ── Dataset info card ─────────────────────────────────────────────
     local infoCard, infoInner = MakeSection(body, "Dataset info")
     infoCard:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
@@ -1184,6 +1253,23 @@ function BuildDataTab(parent)
 
     -- OnShow re-reads leader state (leadership can change while panel is open).
     body:SetScript("OnShow", function()
+        -- RC schema banner visibility.
+        local verdict = addon and addon.db
+                         and addon.db.profile
+                         and addon.db.profile.rcSchemaDetected
+        if verdict and verdict.status ~= "ok" then
+            local T2 = ns.Theme
+            local col = (verdict.status == "degraded") and T2.warning or T2.danger
+            schemaLbl:SetTextColor(col[1], col[2], col[3])
+            schemaCard:Show()
+            -- Push existing cards down by 60px when banner is visible.
+            infoCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -64)
+        else
+            schemaCard:Hide()
+            -- Restore default infoCard position.
+            infoCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
+        end
+
         updateInfoLabel()
 
         -- Show/hide team URL button.
