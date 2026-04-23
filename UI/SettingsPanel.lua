@@ -853,11 +853,11 @@ function BuildTuningTab(parent)
         end,
     })
 
-    -- ── Display section (2.10) ────────────────────────────────────────
+    -- ── Display section (2.10 + 4.11) ────────────────────────────────────────
     local dispCard, dispInner = MakeSection(body, "Display")
     dispCard:SetPoint("TOPLEFT",  card, "BOTTOMLEFT",  0, -8)
     dispCard:SetPoint("TOPRIGHT", card, "BOTTOMRIGHT", 0, -8)
-    dispCard:SetHeight(80)
+    dispCard:SetHeight(120)
 
     -- Conflict threshold slider (integer 0-20).
     local conflictSld = MakeSlider(dispInner, {
@@ -896,6 +896,68 @@ function BuildTuningTab(parent)
     conflictHint:SetText(
         "When two candidates' scores are within this many points, "
         .. "both cells show a ~ prefix. Set to 0 to disable.")
+
+    -- ── Color mode dropdown (4.11) ────────────────────────────────────────
+    local colorModeLbl = dispInner:CreateFontString(nil, "OVERLAY")
+    colorModeLbl:SetFont(T.fontBody, T.sizeBody)
+    colorModeLbl:SetTextColor(T.white[1], T.white[2], T.white[3])
+    colorModeLbl:SetPoint("TOPLEFT", dispInner, "TOPLEFT", 4, -52)
+    colorModeLbl:SetText("Color mode")
+
+    local colorModeHint = dispInner:CreateFontString(nil, "OVERLAY")
+    colorModeHint:SetFont(T.fontBody, T.sizeSmall)
+    colorModeHint:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    colorModeHint:SetPoint("TOPLEFT", colorModeLbl, "BOTTOMLEFT", 0, -2)
+    colorModeHint:SetWidth(340)
+    colorModeHint:SetText(
+        "Default = red/amber/green.  Deuter/Protan = orange/blue.  "
+        .. "High Contrast = filled cell background, white text.")
+
+    -- Color mode options in display order.
+    local COLOR_MODE_OPTIONS = {
+        { value = "default",     label = "Default (red/amber/green)" },
+        { value = "deuter",      label = "Deuteranopia / Protanopia (orange/blue)" },
+        { value = "highcontrast",label = "High Contrast (filled background)" },
+    }
+
+    local colorModeDropdown = CreateFrame("Frame", "BobleLootColorModeDropdown",
+        dispInner, "UIDropDownMenuTemplate")
+    colorModeDropdown:SetPoint("TOPLEFT", colorModeLbl, "TOPLEFT", 110, 4)
+    UIDropDownMenu_SetWidth(colorModeDropdown, 240)
+
+    local function RefreshColorModeDropdown()
+        local current = (addon and addon.db.profile.colorMode) or "default"
+        UIDropDownMenu_SetSelectedValue(colorModeDropdown, current)
+        -- Update button text to match selected label.
+        for _, opt in ipairs(COLOR_MODE_OPTIONS) do
+            if opt.value == current then
+                UIDropDownMenu_SetText(colorModeDropdown, opt.label)
+                break
+            end
+        end
+    end
+
+    UIDropDownMenu_Initialize(colorModeDropdown, function(self, level, menuList)
+        for _, opt in ipairs(COLOR_MODE_OPTIONS) do
+            local info = UIDropDownMenu_CreateInfo()
+            info.text     = opt.label
+            info.value    = opt.value
+            info.func     = function(item)
+                if not addon then return end
+                local mode = item.value
+                addon.db.profile.colorMode = mode
+                UIDropDownMenu_SetSelectedValue(colorModeDropdown, mode)
+                UIDropDownMenu_SetText(colorModeDropdown, item:GetText())
+                -- Apply mode immediately — changes are visible at once.
+                if ns.Theme and ns.Theme.ApplyColorMode then
+                    ns.Theme:ApplyColorMode(mode)
+                end
+            end
+            info.checked  = ((addon and addon.db.profile.colorMode) or "default") == opt.value
+            info.keepShownOnClick = false
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
 
     -- ── Score trend tracking (3.8) ────────────────────────────────────────
     local trendCard, trendInner = MakeSection(body, "Score trend tracking")
@@ -1011,6 +1073,8 @@ function BuildTuningTab(parent)
         if trendWindowSld then
             trendWindowSld:SetValue(addon.db.profile.trendHistoryDays or 28)
         end
+        -- 4.11: refresh color mode dropdown.
+        RefreshColorModeDropdown()
     end)
 end
 
