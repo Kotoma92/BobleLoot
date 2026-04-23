@@ -16,6 +16,7 @@ Migrations.lua
 Core.lua
 Scoring.lua
 Sync.lua
+RCCompat.lua
 VotingFrame.lua
 LootFrame.lua
 RaidReminder.lua
