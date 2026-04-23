@@ -27,9 +27,11 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import functools
 import json
 import os
 import sys
+import time as _time_module
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -62,6 +64,84 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
+
+# --------------------------------------------------------------------------
+# Retry / backoff helpers (item 4.4)
+# --------------------------------------------------------------------------
+
+def _sleep(seconds: float) -> None:
+    """Thin wrapper around time.sleep for test-monkeypatching."""
+    _time_module.sleep(seconds)
+
+
+def retry_with_backoff(
+    fn,
+    delays: list[float],
+    cache_key_fn,
+    rate_limit_warn_threshold: int = 5,
+):
+    """Wrap ``fn`` with exponential backoff and a cached-fallback final stage.
+
+    Args:
+        fn: The callable to retry. Must accept ``(url_or_path, api_key)``
+            and raise ``urllib.error.URLError`` / ``urllib.error.HTTPError``
+            on failure.
+        delays: Ordered list of sleep durations (seconds) between attempts.
+            ``len(delays) + 1`` total attempts are made before the cache
+            fallback is tried.
+        cache_key_fn: Callable ``(url, api_key) -> str`` that returns the
+            cache key to pass to ``_read_cache``. Pass ``None`` to skip
+            the cache fallback (exception is propagated instead).
+        rate_limit_warn_threshold: Log a warning when
+            ``X-RateLimit-Remaining`` (if present in the response headers)
+            is at or below this value. Default 5.
+
+    Returns:
+        A wrapped callable with the same signature as ``fn``.
+    """
+    @functools.wraps(fn)
+    def wrapper(url_or_path, api_key):
+        last_exc = None
+        for attempt, delay in enumerate(
+            [None] + delays  # attempt 0 = no prior delay
+        ):
+            if delay is not None:
+                _sleep(delay)
+            try:
+                result = fn(url_or_path, api_key)
+                return result
+            except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+                last_exc = exc
+                # Log rate-limit warnings immediately.
+                remaining = None
+                if hasattr(exc, "headers") and exc.headers:
+                    remaining = exc.headers.get("X-RateLimit-Remaining")
+                if remaining is not None:
+                    try:
+                        rem_int = int(remaining)
+                        if rem_int <= rate_limit_warn_threshold:
+                            print(
+                                f"[WARN] X-RateLimit-Remaining={rem_int} — "
+                                f"approaching WoWAudit rate limit.",
+                                file=sys.stderr,
+                            )
+                    except (ValueError, TypeError):
+                        pass
+                # Continue to next retry.
+        # All retries exhausted — try cache fallback.
+        if cache_key_fn is not None:
+            cached = _read_cache(cache_key_fn(url_or_path, api_key))
+            if cached is not None:
+                print(
+                    f"[WARN] All retries failed for {url_or_path!r}; "
+                    f"using cached response.",
+                    file=sys.stderr,
+                )
+                return cached
+        raise last_exc
+
+    return wrapper
+
 
 # --------------------------------------------------------------------------
 # constants
@@ -569,6 +649,15 @@ def http_get_json(path: str, api_key: str) -> object:
     )
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
+
+
+# Apply retry_with_backoff to http_get_json (item 4.4).
+# Cache key is the path string (first argument), matching what _write_cache uses.
+http_get_json = retry_with_backoff(
+    http_get_json,
+    delays=[5, 30],
+    cache_key_fn=lambda path, _key: path,
+)
 
 
 def _full_name(name: str | None, realm: str | None) -> str | None:

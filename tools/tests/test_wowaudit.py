@@ -1360,3 +1360,133 @@ def test_tier_config_yaml_is_valid():
     doc = yaml.safe_load(TIER_CONFIG_PATH.read_text(encoding="utf-8"))
     assert "tiers" in doc
     assert isinstance(doc["tiers"], dict)
+
+
+# ---------------------------------------------------------------------------
+# Task 4A-2 — retry_with_backoff decorator (item 4.4)
+# ---------------------------------------------------------------------------
+
+import time
+
+
+def test_retry_succeeds_on_first_attempt(monkeypatch):
+    """A function that always succeeds is called exactly once."""
+    call_count = 0
+
+    def always_ok(url, key):
+        nonlocal call_count
+        call_count += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(wa, "_sleep", lambda _: None)  # skip real sleep
+    decorated = wa.retry_with_backoff(always_ok, delays=[5, 30], cache_key_fn=None)
+    result = decorated("http://example.com/test", "apikey")
+    assert result == {"ok": True}
+    assert call_count == 1
+
+
+def test_retry_retries_on_http_error_then_succeeds(monkeypatch):
+    """First call raises HTTPError; second call succeeds."""
+    attempts = []
+
+    def flaky(url, key):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise urllib.error.HTTPError(url, 429, "Rate Limited", {}, None)
+        return {"ok": True}
+
+    monkeypatch.setattr(wa, "_sleep", lambda _: None)
+    decorated = wa.retry_with_backoff(flaky, delays=[5, 30], cache_key_fn=None)
+    result = decorated("http://example.com/test", "key")
+    assert result == {"ok": True}
+    assert len(attempts) == 2
+
+
+def test_retry_exhausts_to_cache_fallback(monkeypatch):
+    """After all retries fail, _read_cache is called as the final fallback."""
+    def always_fail(url, key):
+        raise urllib.error.HTTPError(url, 503, "Unavailable", {}, None)
+
+    cached_value = {"cached": True}
+    cache_calls = []
+
+    def fake_read_cache(path):
+        cache_calls.append(path)
+        return cached_value
+
+    monkeypatch.setattr(wa, "_sleep", lambda _: None)
+    monkeypatch.setattr(wa, "_read_cache", fake_read_cache)
+
+    decorated = wa.retry_with_backoff(
+        always_fail,
+        delays=[0, 0],
+        cache_key_fn=lambda url, key: url,
+    )
+    result = decorated("http://example.com/test", "key")
+    assert result == {"cached": True}
+    assert len(cache_calls) == 1
+
+
+def test_retry_propagates_when_cache_empty(monkeypatch):
+    """When all retries fail and cache is empty, the last exception propagates."""
+    def always_fail(url, key):
+        raise urllib.error.HTTPError(url, 503, "Unavailable", {}, None)
+
+    monkeypatch.setattr(wa, "_sleep", lambda _: None)
+    monkeypatch.setattr(wa, "_read_cache", lambda _: None)  # cache miss
+
+    decorated = wa.retry_with_backoff(
+        always_fail,
+        delays=[0, 0],
+        cache_key_fn=lambda url, key: url,
+    )
+    with pytest.raises(urllib.error.HTTPError):
+        decorated("http://example.com/test", "key")
+
+
+def test_retry_sleep_durations_called_in_order(monkeypatch):
+    """Sleep is called with the configured delays in order."""
+    slept = []
+    attempts = [0]
+
+    def flaky(url, key):
+        attempts[0] += 1
+        if attempts[0] < 3:
+            raise urllib.error.HTTPError(url, 429, "Rate", {}, None)
+        return {"ok": True}
+
+    monkeypatch.setattr(wa, "_sleep", lambda d: slept.append(d))
+    decorated = wa.retry_with_backoff(flaky, delays=[5, 30], cache_key_fn=None)
+    result = decorated("http://example.com/test", "key")
+    assert result == {"ok": True}
+    assert slept == [5, 30]
+
+
+def test_http_get_json_uses_backoff_on_rate_limit(monkeypatch):
+    """http_get_json retries on 429 rather than propagating immediately."""
+    # Simulate rate-limit on first call, success on second.
+    call_log = []
+
+    def fake_urlopen(req, **kwargs):
+        call_log.append("called")
+        if len(call_log) == 1:
+            raise urllib.error.HTTPError(
+                req.full_url, 429, "Too Many Requests", {}, None
+            )
+        # Second call: return a minimal JSON response
+        import io
+        body = b'{"characters": []}'
+        class FakeResponse:
+            headers = {}
+            def read(self):
+                return body
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        return FakeResponse()
+
+    monkeypatch.setattr(wa, "_sleep", lambda _: None)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    result = wa.http_get_json("/test-endpoint", "fake-key")
+    assert isinstance(result, dict)
+    assert len(call_log) == 2
