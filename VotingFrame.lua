@@ -766,6 +766,96 @@ function VF:Hook(addon, RC)
     -- Store refreshFreshnessBadge so it can be called after data reloads.
     VF.refreshFreshnessBadge = refreshFreshnessBadge
 
+    -- ── Ghost-weights toggle button (3.10) ───────────────────────────
+    -- Anchor: top-right of the score column header cell, left of the
+    -- freshness badge (which is already TOPRIGHT).
+    if colIdx and st and st.header and st.header.cols and st.header.cols[colIdx] then
+        local headerCell = st.header.cols[colIdx]
+        local T = ns.Theme
+
+        local ghostBtn = CreateFrame("Button", nil, headerCell)
+        ghostBtn:SetSize(34, 14)
+        -- Sit to the left of the freshness badge; badge is at TOPRIGHT.
+        ghostBtn:SetPoint("TOPRIGHT", headerCell, "TOPRIGHT", -8, -2)
+
+        local btnTex = ghostBtn:CreateTexture(nil, "BACKGROUND")
+        btnTex:SetAllPoints()
+        btnTex:SetColorTexture(0.12, 0.12, 0.16, 0.9)
+
+        local btnLabel = ghostBtn:CreateFontString(nil, "OVERLAY")
+        btnLabel:SetFont(T.fontBody, T.sizeSmall, "OUTLINE")
+        btnLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+        btnLabel:SetAllPoints()
+        btnLabel:SetJustifyH("CENTER")
+        btnLabel:SetText("Farm")
+        VF._ghostBtnLabel = btnLabel
+
+        -- Visual indicator on the header cell when ghost mode is active.
+        local ghostActiveLine = headerCell:CreateTexture(nil, "OVERLAY")
+        ghostActiveLine:SetPoint("BOTTOMLEFT",  headerCell, "BOTTOMLEFT",  0, 0)
+        ghostActiveLine:SetPoint("BOTTOMRIGHT", headerCell, "BOTTOMRIGHT", 0, 0)
+        ghostActiveLine:SetHeight(2)
+        ghostActiveLine:SetColorTexture(T.accent[1], T.accent[2], T.accent[3], 1)
+        ghostActiveLine:Hide()
+        VF._ghostActiveLine = ghostActiveLine
+
+        local function updateGhostButtonState()
+            if VF.ghostMode then
+                btnLabel:SetTextColor(T.accent[1], T.accent[2], T.accent[3])
+                btnLabel:SetText("Prog")  -- click to return to Prog weights
+                ghostActiveLine:Show()
+            else
+                btnLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+                btnLabel:SetText("Farm")  -- click to preview Farm weights
+                ghostActiveLine:Hide()
+            end
+        end
+        VF._updateGhostButtonState = updateGhostButtonState
+
+        ghostBtn:SetScript("OnClick", function()
+            VF.SetGhostMode(not VF.ghostMode)
+            updateGhostButtonState()
+        end)
+
+        ghostBtn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+            GameTooltip:AddLine("BobleLoot \226\128\148 Ghost Weights")
+            if VF.ghostMode then
+                GameTooltip:AddLine(
+                    "Previewing Farm weights. Click to return to Prog weights.",
+                    1, 1, 1)
+            else
+                local addonRef = VF.addon
+                local preset = "farm"
+                if addonRef and addonRef.db then
+                    preset = addonRef.db.profile.ghostPresets.activeGhostPreset
+                             or "farm"
+                end
+                GameTooltip:AddLine(string.format(
+                    "Preview how current candidates rank under %s weights " ..
+                    "(your Prog weights are unchanged).", preset:gsub("^%l", string.upper)),
+                    1, 1, 1)
+            end
+            GameTooltip:AddLine("|cff666666No network traffic. Display only.|r")
+            GameTooltip:Show()
+        end)
+        ghostBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        VF._ghostBtn = ghostBtn
+    end
+
+    -- Ghost mode clears on session end.
+    if rcVoting.frame then
+        rcVoting.frame:HookScript("OnHide", function()
+            if VF.ghostMode then
+                VF.SetGhostMode(false)
+                if VF._updateGhostButtonState then
+                    VF._updateGhostButtonState()
+                end
+            end
+        end)
+    end
+
     self.hooked = true
     addon:Print("hooked into RCLootCouncil voting frame.")
     return true
