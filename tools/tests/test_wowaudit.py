@@ -960,3 +960,53 @@ def test_fetch_rows_no_spec_aware_uses_max(monkeypatch):
     row = rows[0]
     # spec_aware=False: max across specs = 8.0
     assert row.get("sim_212401") == 8.0
+
+
+# ---------------------------------------------------------------------------
+# Task 2A-5 — tier preset loading
+# ---------------------------------------------------------------------------
+
+def test_load_tier_preset_tww_s3():
+    preset = wa._load_tier_preset("TWW-S3")
+    assert preset["ilvlFloor"] == 636
+    assert preset["mplusCap"]  == 160
+
+
+def test_load_tier_preset_case_insensitive():
+    preset = wa._load_tier_preset("tww-s3")
+    assert preset["mplusCap"] == 160
+
+
+def test_load_tier_preset_unknown_exits(monkeypatch):
+    import sys
+    with pytest.raises(SystemExit):
+        wa._load_tier_preset("totally-fake-tier-xyz")
+
+
+def test_load_tier_preset_tww_s2():
+    preset = wa._load_tier_preset("TWW-S2")
+    assert preset["ilvlFloor"] == 610
+
+
+def test_build_lua_emits_tier_preset_name():
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0, "mplus_dungeons": 30}]
+    lua = wa.build_lua(
+        rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+        tier_name="TWW-S3",
+    )
+    assert 'tierPreset  = "TWW-S3"' in lua
+
+
+def test_build_lua_emits_loot_min_ilvl():
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0, "mplus_dungeons": 30}]
+    lua = wa.build_lua(
+        rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5,
+        loot_min_ilvl=636,
+    )
+    assert "lootMinIlvl = 636" in lua
+
+
+def test_build_lua_omits_loot_min_ilvl_when_zero():
+    rows = [{"character": "Boble-Stormrage", "attendance": 95.0, "mplus_dungeons": 30}]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5, loot_min_ilvl=0)
+    assert "lootMinIlvl" not in lua

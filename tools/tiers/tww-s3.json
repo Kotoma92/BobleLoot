@@ -1,0 +1,8 @@
+{
+  "_comment": "The War Within Season 3 preset — adjust numbers at tier release.",
+  "ilvlFloor":   636,
+  "mplusCap":    160,
+  "historyDays": 84,
+  "softFloor":   6,
+  "bisPath":     null
+}

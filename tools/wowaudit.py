@@ -70,7 +70,41 @@ _load_dotenv()
 DEFAULT_OUT = Path(__file__).resolve().parent.parent / "Data" / "BobleLoot_Data.lua"
 REQUIRED_COLS = {"character", "mplus_dungeons", "attendance"}
 
+TIERS_DIR = Path(__file__).resolve().parent / "tiers"
+
 API_BASE = "https://wowaudit.com/v1"
+
+
+def _load_tier_preset(tier_name: str) -> dict:
+    """Load a tier preset JSON file from ``tools/tiers/``.
+
+    The file is looked up as ``tools/tiers/<tier_name>.json`` with
+    case-insensitive matching and hyphens normalised to lower case.
+
+    Args:
+        tier_name: e.g. ``"TWW-S3"`` or ``"tww-s3"``.
+
+    Returns:
+        Dict with any subset of keys: ``ilvlFloor``, ``mplusCap``,
+        ``historyDays``, ``softFloor``, ``bisPath``.
+
+    Raises:
+        SystemExit: If no matching preset file is found.
+    """
+    normalised = tier_name.strip().lower()
+    candidate  = TIERS_DIR / f"{normalised}.json"
+    if not candidate.is_file():
+        available = sorted(p.stem for p in TIERS_DIR.glob("*.json"))
+        sys.exit(
+            f"Tier preset '{tier_name}' not found. "
+            f"Available: {', '.join(available) or '(none)'}. "
+            f"Preset files live in tools/tiers/."
+        )
+    try:
+        with candidate.open(encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        sys.exit(f"Failed to load tier preset '{tier_name}': {exc}")
 
 # --------------------------------------------------------------------------
 # CSV / XLSX reading
@@ -834,11 +868,63 @@ def main():
     ap.add_argument("--mplus-cap-per-week", type=int, default=10,
                     help="Per-week increment for the auto M+ cap (default 10).")
     ap.add_argument("--history-cap", type=int,   default=5)
+    ap.add_argument(
+        "--tier",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Apply a named tier preset from tools/tiers/<NAME>.json. "
+            "Sets ilvlFloor, mplusCap, historyDays, softFloor, and optionally "
+            "bisPath. Example: --tier TWW-S3. "
+            "Explicit --mplus-cap / --history-cap / --loot-min-ilvl values "
+            "always override the preset."
+        ),
+    )
+    ap.add_argument(
+        "--loot-min-ilvl",
+        type=int,
+        default=None,
+        help=(
+            "Minimum item level for loot history entries. "
+            "Overrides the tier preset's ilvlFloor if both are specified."
+        ),
+    )
+    ap.add_argument(
+        "--no-spec-aware",
+        action="store_true",
+        default=False,
+        help=(
+            "Revert sim selection to max-across-all-specs (pre-2.1 behaviour). "
+            "Default is spec-aware: only the character's main spec's sim is used."
+        ),
+    )
     args = ap.parse_args()
+
+    # Apply tier preset (values are only used as defaults if the
+    # corresponding explicit CLI argument was not provided).
+    tier_preset: dict = {}
+    if args.tier is not None:
+        tier_preset = _load_tier_preset(args.tier)
+
+    def _preset(key: str, cli_val, default):
+        """Return cli_val if it was explicitly set, else preset value, else default."""
+        if cli_val is not None:
+            return cli_val
+        if key in tier_preset and tier_preset[key] is not None:
+            return tier_preset[key]
+        return default
+
+    # Resolve loot min ilvl (used later in main for the run report / Lua header).
+    loot_min_ilvl = _preset("ilvlFloor", args.loot_min_ilvl, 0)
+    # Resolve history days override.
+    history_days_override = _preset("historyDays", None, None)
+    # Resolve soft floor (history cap) — used as new default for history_cap.
+    soft_floor_override = _preset("softFloor", None, None)
 
     weeks_in_season = 1
     team_url = None
     fetch_warnings: list[str] = []
+    spec_aware = not args.no_spec_aware
     if args.wowaudit is not None:
         # Convert mode.
         if args.bis is None:
@@ -856,7 +942,8 @@ def main():
                 "to convert a manual export."
             )
         rows, weeks_in_season, fetch_warnings = fetch_rows(
-            args.api_key, args.dump_raw, use_cache=args.use_cache
+            args.api_key, args.dump_raw, use_cache=args.use_cache,
+            spec_aware=spec_aware,
         )
         team_url = fetch_team_url(args.api_key)
         if not rows and not fetch_warnings:
@@ -872,13 +959,26 @@ def main():
     if args.mplus_cap is not None:
         mplus_cap = args.mplus_cap
     else:
-        mplus_cap = max(args.mplus_cap_per_week,
-                        args.mplus_cap_per_week * max(weeks_in_season, 1))
+        preset_mplus = tier_preset.get("mplusCap")
+        if preset_mplus is not None:
+            mplus_cap = int(preset_mplus)
+        else:
+            mplus_cap = max(args.mplus_cap_per_week,
+                            args.mplus_cap_per_week * max(weeks_in_season, 1))
+
+    # History cap: use soft_floor_override from preset if no explicit --history-cap provided.
+    history_cap = args.history_cap
+    if soft_floor_override is not None and args.history_cap == 5:
+        # Only override the default (5) if the user didn't explicitly set it.
+        history_cap = int(soft_floor_override)
 
     try:
         lua = build_lua(
-            rows, bis, args.sim_cap, mplus_cap, args.history_cap,
+            rows, bis, args.sim_cap, mplus_cap, history_cap,
             team_url, fetch_warnings if not args.wowaudit else None,
+            loot_min_ilvl=loot_min_ilvl,
+            history_days=history_days_override,
+            tier_name=args.tier,
         )
     except ValueError as exc:
         sys.exit(str(exc))
