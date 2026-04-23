@@ -303,19 +303,22 @@ local function Populate(itemID, name, opts)
             }
         end
 
-        -- Optional: mainspec / role fields (2A graceful degradation)
+        -- Optional: mainspec / role fields (2A graceful degradation).
+        -- These fields are added by plan 2A and may not exist yet.
+        -- Render them if present; silently omit if absent.
         local charData = data and data.characters and data.characters[name]
         if charData then
             local extras = {}
             if charData.mainspec then
                 extras[#extras+1] = string.format(
-                    "|cffaaaaaarole: %s|r", charData.mainspec)
+                    "|cffaaaaaamainspec: %s|r", charData.mainspec)
             end
             if charData.role then
                 extras[#extras+1] = string.format(
                     "|cffaaaaaarole: %s|r", charData.role)
             end
             if #extras > 0 then
+                lines[#lines+1] = { left = " " }
                 lines[#lines+1] = { left = table.concat(extras, "  ") }
             end
         end
@@ -327,7 +330,6 @@ local function Populate(itemID, name, opts)
 
     -- Render lines into the scroll child.
     -- We use a single multi-line FontString approach with a scrollable child.
-    local Th2 = T()
     frame._scrollChild:SetHeight(1)  -- will grow as lines are placed
 
     -- Hide all pooled line frames.
@@ -346,10 +348,10 @@ local function Populate(itemID, name, opts)
         if not lf then
             lf = CreateFrame("Frame", nil, frame._scrollChild)
             lf._left  = lf:CreateFontString(nil, "OVERLAY")
-            lf._left:SetFont(Th2.fontBody, Th2.sizeBody)
+            lf._left:SetFont(Th.fontBody, Th.sizeBody)
             lf._left:SetJustifyH("LEFT")
             lf._right = lf:CreateFontString(nil, "OVERLAY")
-            lf._right:SetFont(Th2.fontBody, Th2.sizeBody)
+            lf._right:SetFont(Th.fontBody, Th.sizeBody)
             lf._right:SetJustifyH("RIGHT")
             _contentLines[i] = lf
         end
