@@ -99,6 +99,64 @@ local function getRC()
     return RC
 end
 
+-- ── Batch 3D: ComparePopout + Ghost Weights tests ────────────────────
+
+BobleLoot.Test3D = {}
+
+-- Opens the comparison popout with two hardcoded names for layout testing.
+-- Call from chat: /run BobleLoot.Test3D.OpenCompare()
+function BobleLoot.Test3D.OpenCompare()
+    local cp = ns.ComparePopout
+    if not cp then
+        print("|cffff5555BobleLoot Test3D:|r ComparePopout module not loaded.")
+        return
+    end
+    -- Use the first two characters from the dataset as test subjects.
+    local data = BobleLoot:GetData()
+    local nameA, nameB
+    if data and data.characters then
+        for n in pairs(data.characters) do
+            if not nameA then nameA = n
+            elseif not nameB then nameB = n
+            end
+            if nameA and nameB then break end
+        end
+    end
+    nameA = nameA or "TestA-Realm"
+    nameB = nameB or "TestB-Realm"
+    local itemID = (function()
+        -- Grab any itemID from the dataset.
+        local d = BobleLoot:GetData()
+        if d and d.characters then
+            for _, c in pairs(d.characters) do
+                if c.sims then
+                    for id in pairs(c.sims) do return id end
+                end
+            end
+        end
+        return 0
+    end)()
+    print(string.format(
+        "|cff33D9F2BobleLoot Test3D:|r Opening popout: %s vs %s on item %d",
+        nameA, nameB, itemID or 0))
+    cp:Open(nameA, nameB, itemID, nil, {})
+end
+
+-- Toggles ghost mode and prints the active state.
+-- Call from chat: /run BobleLoot.Test3D.ToggleGhost()
+function BobleLoot.Test3D.ToggleGhost()
+    local VF = ns.VotingFrame
+    if not VF then
+        print("|cffff5555BobleLoot Test3D:|r VotingFrame module not loaded.")
+        return
+    end
+    VF.SetGhostMode(not VF.ghostMode)
+    print(string.format(
+        "|cff33D9F2BobleLoot Test3D:|r Ghost mode is now: %s (preset: %s)",
+        VF.ghostMode and "ACTIVE" or "OFF",
+        (BobleLoot.db.profile.ghostPresets.activeGhostPreset or "farm")))
+end
+
 function Test:Run(addon, count, useDataset)
     local RC = getRC()
     if not RC then
