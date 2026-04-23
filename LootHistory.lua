@@ -239,6 +239,179 @@ function LH:RecordVaultSelection(addon, playerName, itemLink, ilvl)
     end
 end
 
+-- ── RC schema-drift detection ─────────────────────────────────────────
+--
+-- Observed RC SavedVar shapes (all read-only; we never write to RC's SV):
+--
+--   Shape A (RC <= 2.x, current as of 2026-04):
+--     RCLootCouncilLootDB = {
+--       factionrealm = {
+--         ["Horde - Draenor"] = {
+--           ["Player-Realm"] = {
+--             [1] = { date, time, lootWon, response, responseID, id, ... }
+--           }
+--         }
+--       }
+--     }
+--
+--   Shape B (hypothetical RC 3.x, per-spec or per-character flattening):
+--     RCLootCouncilLootDB = {
+--       ["Player-Realm"] = { ... }   -- factionrealm key gone
+--     }
+--
+--   Shape C (hypothetical encrypted/opaque storage):
+--     RCLootCouncilLootDB = { payload = "<base64>", version = 3 }
+--
+-- EXPECTED_ENTRY_FIELDS lists field-name groups. For each group, at least
+-- one name must be present on a sample entry; if none are, that group is
+-- flagged as missing.
+
+local EXPECTED_ENTRY_FIELDS = {
+    { group = "id",       names = { "id", "itemID" } },
+    { group = "item",     names = { "lootWon", "link", "itemLink" } },
+    { group = "response", names = { "response", "responseID" } },
+    { group = "time",     names = { "time", "timestamp", "date" } },
+    { group = "ilvl",     names = { "ilvl", "itemLevel", "iLvl", "lvl" } },
+}
+
+-- Inspect `_G.RCLootCouncilLootDB` (or a passed-in substitute for
+-- offline testing) and return a shape-verdict table matching the
+-- cross-plan contract above. Also writes to BobleLootDB.profile if
+-- `addon` is provided.
+--
+-- `db`    -- the raw RCLootCouncilLootDB table (or nil to use the live global)
+-- `addon` -- the BobleLoot addon object (may be nil for unit testing)
+-- Returns: verdict table (same shape as rcSchemaDetected)
+function LH:DetectSchemaVersion(db, addon)
+    db = db or _G.RCLootCouncilLootDB
+
+    local verdict = {
+        status        = "unknown",
+        version       = 0,
+        checkedAt     = time(),
+        missingFields = {},
+        rcVersion     = "?",
+        sourceUsed    = "?",
+    }
+
+    -- Preserve existing counter across calls.
+    local profile = addon and addon.db and addon.db.profile
+    local prev = profile and profile.rcSchemaDetected
+    verdict.version = (prev and type(prev.version) == "number")
+                       and (prev.version + 1) or 1
+
+    -- RC version string (purely informational).
+    local ok, rc = pcall(function()
+        return LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
+    end)
+    if ok and rc and rc.version then
+        verdict.rcVersion = tostring(rc.version)
+    end
+
+    -- ── Layer 1: top-level factionrealm key ───────────────────────────
+    if type(db) ~= "table" then
+        -- SavedVar entirely missing or wrong type.
+        verdict.status = "unknown"
+        verdict.missingFields = { "RCLootCouncilLootDB (top-level missing)" }
+        LH.lastVerdictForDiag = verdict
+        if profile then profile.rcSchemaDetected = verdict end
+        return verdict
+    end
+
+    local fr = db.factionrealm
+    if type(fr) ~= "table" then
+        verdict.status = "unknown"
+        verdict.missingFields = { "RCLootCouncilLootDB.factionrealm" }
+        LH.lastVerdictForDiag = verdict
+        if profile then profile.rcSchemaDetected = verdict end
+        return verdict
+    end
+
+    -- ── Layer 2: factionrealm is table-of-tables ──────────────────────
+    -- At least one factionrealm key must be a table of character entries.
+    local frKey, frVal
+    for k, v in pairs(fr) do
+        if type(k) == "string" and type(v) == "table" then
+            frKey, frVal = k, v
+            break
+        end
+    end
+    if not frKey then
+        verdict.status = "unknown"
+        verdict.missingFields = { "factionrealm sub-tables (no string->table entries)" }
+        LH.lastVerdictForDiag = verdict
+        if profile then profile.rcSchemaDetected = verdict end
+        return verdict
+    end
+
+    -- Confirm at least one character key maps to an array of tables.
+    local charKey, charEntries
+    for k, v in pairs(frVal) do
+        if type(k) == "string" and type(v) == "table" and #v > 0
+           and type(v[1]) == "table" then
+            charKey, charEntries = k, v
+            break
+        end
+    end
+    if not charKey then
+        -- factionrealm structure exists but contains no recognisable
+        -- character arrays — could be an empty raid night or degraded.
+        -- Treat as "degraded" rather than "unknown" because factionrealm
+        -- is present; further entry-field checks are skipped (nothing to sample).
+        verdict.status    = "degraded"
+        verdict.sourceUsed = "RCLootCouncilLootDB.factionrealm{" .. frKey .. "}"
+        verdict.missingFields = { "no character entry arrays found (empty history?)" }
+        LH.lastVerdictForDiag = verdict
+        if profile then profile.rcSchemaDetected = verdict end
+        return verdict
+    end
+
+    verdict.sourceUsed = "RCLootCouncilLootDB.factionrealm{" .. frKey .. "}[" .. charKey .. "]"
+
+    -- ── Layer 3: per-entry field groups ───────────────────────────────
+    -- Sample up to the first 3 entries to reduce false positives on
+    -- partially-populated early entries.
+    local sampleSize = math.min(3, #charEntries)
+    local missingGroups = {}
+
+    for _, fieldGroup in ipairs(EXPECTED_ENTRY_FIELDS) do
+        local found = false
+        for i = 1, sampleSize do
+            local entry = charEntries[i]
+            if type(entry) == "table" then
+                for _, fieldName in ipairs(fieldGroup.names) do
+                    if entry[fieldName] ~= nil then
+                        found = true
+                        break
+                    end
+                end
+            end
+            if found then break end
+        end
+        if not found then
+            missingGroups[#missingGroups + 1] = fieldGroup.group
+                .. " (tried: " .. table.concat(fieldGroup.names, "/") .. ")"
+        end
+    end
+
+    verdict.missingFields = missingGroups
+
+    -- "ilvl" is the only field group we already have fallback resolvers
+    -- for that we tolerate silently; everything else is a real concern.
+    -- "degraded" = ilvl missing (we can limp along) OR any one other
+    -- group missing. "unknown" reserved for missing factionrealm only
+    -- (handled above). Here all remaining cases are ok or degraded.
+    if #missingGroups == 0 then
+        verdict.status = "ok"
+    else
+        verdict.status = "degraded"
+    end
+
+    LH.lastVerdictForDiag = verdict
+    if profile then profile.rcSchemaDetected = verdict end
+    return verdict
+end
+
 -- Build name -> { total = weighted sum, counts = {bis=N, major=N, ...} }
 -- profile (6th param) is used for wasted-loot filtering (3.5). When nil,
 -- wasted-loot checks are skipped (backward compat with any ad-hoc callers).
