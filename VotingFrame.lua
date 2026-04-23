@@ -161,8 +161,41 @@ local function computeSessionStats(rcVoting, addon, session, tableData)
         end
     end
 
-    _sessionStats = { session = session, itemID = itemID, median = median, max = max }
+    -- 2.10: also build a name->score map for O(1) lookup in doCellUpdate
+    -- and store the sorted scores list for isConflict(). Reuses the
+    -- simRef/histRef already computed above — no second traversal.
+    local nameToScore = {}
+    if names then
+        for _, n in ipairs(names) do
+            local s = computeScoreForRow(rcVoting, addon, session, n, simRef, histRef)
+            if s then nameToScore[n] = s end
+        end
+    end
+
+    _sessionStats = {
+        session      = session,
+        itemID       = itemID,
+        median       = median,
+        max          = max,
+        sortedScores = scores,    -- already sorted ascending
+        nameToScore  = nameToScore,
+    }
     return median, max
+end
+
+-- 2.10: Returns true when `score` is within `threshold` of any other score
+-- in the sorted list. Uses a linear scan — O(k) where k = number of
+-- candidates within threshold, which is nearly always 0-2 in practice.
+local function isConflict(stats, score, threshold)
+    if not stats or not stats.sortedScores or #stats.sortedScores < 2 then
+        return false
+    end
+    for _, s in ipairs(stats.sortedScores) do
+        if s ~= score and math.abs(s - score) <= threshold then
+            return true
+        end
+    end
+    return false
 end
 
 local FRESHNESS_WARN_SECS  = 72 * 3600       -- 72 hours
@@ -194,7 +227,8 @@ end
 -- inDataset: bool           (true = character row exists in dataset)
 -- median   : number | nil   (session median across all scored candidates)
 -- max      : number | nil   (session maximum across all scored candidates)
-local function formatScore(score, inDataset, median, max)
+-- conflict : bool | nil     (2.10: true = within conflictThreshold of another candidate)
+local function formatScore(score, inDataset, median, max, conflict)
     if not inDataset then
         -- Character is not in the dataset at all.
         local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
@@ -207,11 +241,18 @@ local function formatScore(score, inDataset, median, max)
         return "|cff666666?|r"
     end
     -- score is a real number (including 0.0).
+    -- 2.10: build the ~ conflict prefix in Theme.muted color.
+    local prefix = ""
+    if conflict then
+        local m = ns.Theme and ns.Theme.muted or {0.55, 0.55, 0.55, 1}
+        prefix = string.format("|cff%02x%02x%02x~|r",
+            math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255))
+    end
     local c = (ns.Theme and ns.Theme.ScoreColorRelative)
               and ns.Theme.ScoreColorRelative(score, median, max)
               or  (ns.Theme and ns.Theme.ScoreColor and ns.Theme.ScoreColor(score))
     if c then
-        return string.format("|cff%02x%02x%02x%d|r",
+        return prefix .. string.format("|cff%02x%02x%02x%d|r",
             math.floor(c[1]*255), math.floor(c[2]*255), math.floor(c[3]*255),
             math.floor(score + 0.5))
     end
@@ -221,7 +262,7 @@ local function formatScore(score, inDataset, median, max)
     elseif score >= 40 then hex = "ffd040"
     else                    hex = "ff5050"
     end
-    return string.format("|cff%s%d|r", hex, math.floor(score + 0.5))
+    return prefix .. string.format("|cff%s%d|r", hex, math.floor(score + 0.5))
 end
 
 -- Format the raw underlying stat for one component.
@@ -422,7 +463,13 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
     local score              = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
     local inDs               = isInDataset(addon, name)
     local median, max        = computeSessionStats(rcVoting, addon, session, data)
-    cellFrame.text:SetText(formatScore(score, inDs, median, max))
+
+    -- conflictThreshold: set in Settings > Tuning > "Display" section (2.10).
+    -- Default 5 points. Both candidates within threshold get the ~ prefix.
+    local threshold = (addon.db and addon.db.profile and addon.db.profile.conflictThreshold) or 5
+    local conflict  = score and isConflict(_sessionStats, score, threshold) or false
+
+    cellFrame.text:SetText(formatScore(score, inDs, median, max, conflict))
 
     -- If we're the leader (and transparency is on so it matters),
     -- broadcast authoritative scores for every candidate so raiders see
