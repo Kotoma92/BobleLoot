@@ -357,6 +357,12 @@ function BobleLoot:OnSlashCommand(input)
             self:SetTransparencyEnabled(input == "transparency on", true)
             self:Print("transparency mode " ..
                 (self:IsTransparencyEnabled() and "ENABLED" or "DISABLED") .. ".")
+            if ns.Toast and ns.Toast.Show then
+                ns.Toast:Show(
+                    "Transparency mode " .. (self:IsTransparencyEnabled() and "ENABLED" or "DISABLED"),
+                    self:IsTransparencyEnabled() and "success" or "warning"
+                )
+            end
         end
     elseif input:match("^score ") then
         local itemID, name = input:match("^score%s+(%d+)%s+(.+)$")

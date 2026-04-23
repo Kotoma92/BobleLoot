@@ -757,6 +757,13 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
         if prev ~= s.transparency then
             addon:Print(string.format("transparency mode %s by %s.",
                 s.transparency and "ENABLED" or "DISABLED", sender))
+            if ns.Toast and ns.Toast.Show then
+                local state = s.transparency and "enabled" or "disabled"
+                ns.Toast:Show(
+                    string.format("Transparency %s by %s", state, sender),
+                    s.transparency and "success" or "warning"
+                )
+            end
             if ns.LootFrame and ns.LootFrame.Refresh then
                 ns.LootFrame:Refresh()
             end
