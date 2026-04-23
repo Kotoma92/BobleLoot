@@ -101,6 +101,44 @@ def test_convert_round_trip_zero_sim_omitted():
 
 
 # ---------------------------------------------------------------------------
+# Plan 1B — simsKnown emission
+# ---------------------------------------------------------------------------
+
+def test_build_lua_emits_sims_known_for_zero_results():
+    """A '0' CSV cell -> simsKnown[id]=true, sims[id] omitted."""
+    rows = [
+        {"character": "Zerochar-Realm", "attendance": 100, "mplus_dungeons": 0,
+         "sim_111": "0", "sim_222": "1.5"},
+    ]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+    assert "[222] = 1.5" in lua
+    assert "[111] = 0" not in lua
+    assert "simsKnown" in lua
+    assert "[111] = true" in lua
+    assert "[222] = true" in lua
+
+
+def test_build_lua_omits_unsimmed_items_from_known():
+    """Empty CSV cell -> item appears in neither sims nor simsKnown."""
+    rows = [
+        {"character": "Partial-Realm", "attendance": 100, "mplus_dungeons": 0,
+         "sim_111": "", "sim_222": "2.0"},
+    ]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+    assert "[111] = true" not in lua
+    assert "[222] = true" in lua
+    assert "[222] = 2.0" in lua
+
+
+def test_build_lua_empty_sims_known_when_no_sim_columns():
+    rows = [
+        {"character": "Nosims-Realm", "attendance": 100, "mplus_dungeons": 0},
+    ]
+    lua = wa.build_lua(rows, {}, sim_cap=5.0, mplus_cap=100, history_cap=5)
+    assert "simsKnown = {}" in lua
+
+
+# ---------------------------------------------------------------------------
 # Task 3 — _best_wishlist_score edge cases
 # ---------------------------------------------------------------------------
 

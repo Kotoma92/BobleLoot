@@ -17,7 +17,10 @@ ns.VotingFrame = VF
 local SCORE_COL = "blScore"
 
 -- Resolved after Scoring.lua loads; both modules are in the same TOC frame.
-local function getComponentOrder() return ns.Scoring.COMPONENT_ORDER end
+local DEFAULT_COMPONENT_ORDER = { "sim", "bis", "history", "attendance", "mplus" }
+local function getComponentOrder()
+    return (ns.Scoring and ns.Scoring.COMPONENT_ORDER) or DEFAULT_COMPONENT_ORDER
+end
 local function getComponentLabel() return ns.Scoring.COMPONENT_LABEL end
 
 -- Pull the current itemID for a session safely.
@@ -119,17 +122,20 @@ end
 
 -- Per-render-pass cache for session median and max. Recomputed whenever
 -- doCellUpdate is called for row 1 (the first row triggers the full pass).
--- Keyed by session number so stale data from a previous item is evicted.
-local _sessionStats = {}   -- { session = N, median = X, max = Y }
+-- Keyed by (session, itemID) so stale data from a previous item is evicted
+-- even if RCLootCouncil reuses the same session slot for a different item.
+local _sessionStats = {}   -- { session = N, itemID = I, median = X, max = Y }
 
 local function computeSessionStats(rcVoting, addon, session, tableData)
-    -- Return cached value if same session.
+    local itemID  = getItemIDForSession(rcVoting, session)
+
+    -- Return cached value if same (session, itemID).
     if _sessionStats.session == session
+       and _sessionStats.itemID  == itemID
        and _sessionStats.median ~= nil then
         return _sessionStats.median, _sessionStats.max
     end
 
-    local itemID  = getItemIDForSession(rcVoting, session)
     local names   = bidderNames(rcVoting, session, tableData)
     local simRef  = simReferenceFor(addon, itemID, names)
     local histRef = historyReferenceFor(addon, names)
@@ -155,7 +161,7 @@ local function computeSessionStats(rcVoting, addon, session, tableData)
         end
     end
 
-    _sessionStats = { session = session, median = median, max = max }
+    _sessionStats = { session = session, itemID = itemID, median = median, max = max }
     return median, max
 end
 
@@ -402,12 +408,13 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
     local session  = rcVoting.GetCurrentSession and rcVoting:GetCurrentSession()
                      or (rcVoting.session)  -- legacy fallback
 
-    -- Evict stats cache when the session number changes.
-    if _sessionStats.session ~= session then
+    local itemID   = getItemIDForSession(rcVoting, session)
+
+    -- Evict stats cache when (session, itemID) changes.
+    if _sessionStats.session ~= session or _sessionStats.itemID ~= itemID then
         _sessionStats = {}
     end
 
-    local itemID   = getItemIDForSession(rcVoting, session)
     local names    = bidderNames(rcVoting, session, data)
     local simRef   = simReferenceFor(addon, itemID, names)
     local histRef  = historyReferenceFor(addon, names)

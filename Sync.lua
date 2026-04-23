@@ -129,6 +129,17 @@ end
 -- (de)serialize
 ----------------------------------------------------------------------------
 
+-- Compare two Adler32 values for equality. LibDeflate:Adler32 is documented
+-- to return a non-negative integer in [0, 2^32), but we normalise both sides
+-- via `% 2^32` defensively against version-skew or any future LibDeflate
+-- implementation that summed without the final modular reduction. In Lua 5.1
+-- on WoW, numbers are doubles; 2^32 fits exactly so the modulo is lossless.
+local ADLER_MOD = 4294967296
+local function adlerEquals(a, b)
+    if type(a) ~= "number" or type(b) ~= "number" then return false end
+    return (a % ADLER_MOD) == (b % ADLER_MOD)
+end
+
 -- Returns encoded_payload, adler32_of_serialized_string.
 -- Returns nil, nil on failure (LibDeflate missing).
 local function encodeData(data)
@@ -383,9 +394,10 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
         local mine = getDataVersion(addon:GetData())
         if not newerThan(msg.v, mine) then return end
 
-        -- Adler32 integrity check. Only enforce when proto >= 2 AND adler is present,
-        -- so v1 peers (no adler field) degrade gracefully.
-        if msg.proto and msg.proto >= 2 and msg.adler ~= nil then
+        -- Adler32 integrity check. Only enforce when proto >= 2 AND adler is
+        -- a number (a malicious peer could send a non-numeric adler; reject
+        -- those as malformed rather than letting the modulo throw).
+        if msg.proto and msg.proto >= 2 and type(msg.adler) == "number" then
             -- We must decode first (Adler32 is on the serialized string, not the
             -- encoded payload), then verify, then use.
             local data, serialized = decodeData(msg.payload)
@@ -396,11 +408,7 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
                 return
             end
             local actualAdler = LibDeflate:Adler32(serialized)
-            -- Adler32 comparison must use modular equivalence to handle sign
-            -- differences (LibDeflate's own IsEqualAdler32 pattern: compare mod 2^32).
-            -- In Lua 5.1 on WoW, numbers are doubles; 2^32 fits exactly.
-            local match = (actualAdler % 4294967296) == (msg.adler % 4294967296)
-            if not match then
+            if not adlerEquals(actualAdler, msg.adler) then
                 if not self._loggedAdlerWarn[sender] then
                     self._loggedAdlerWarn[sender] = true
                     DEFAULT_CHAT_FRAME:AddMessage(string.format(
@@ -426,10 +434,10 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
                 "received dataset from %s (%d characters, version %s) [Adler32 OK]",
                 sender, countChars(data), tostring(data.generatedAt)))
         else
-            -- Proto 1 or missing adler field: fall back to old path (no integrity check).
+            -- Proto 1 or missing/non-numeric adler field: fall back to old
+            -- path (no integrity check). decodeData returns (data, serialized);
+            -- we discard the serialized string here.
             local data = decodeData(msg.payload)
-            -- Note: decodeData now returns two values; take only the first.
-            if type(data) ~= "table" then data = nil end
             if not data or type(data.characters) ~= "table" then
                 addon:Print("received malformed data from " .. sender)
                 return

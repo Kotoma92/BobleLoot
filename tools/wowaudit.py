@@ -291,20 +291,31 @@ def build_lua(
             out.append("            bis  = {},")
 
         sim_pairs: list[str] = []
+        sim_known_ids: list[int] = []
         for col in sim_cols:
-            val = (
-                _to_float(row.get(col), default=None)
-                if row.get(col) not in (None, "")
-                else None
-            )
+            raw = row.get(col)
+            if raw is None or raw == "":
+                continue
+            val = _to_float(raw, default=None)
             if val is None:
                 continue
             item_id = int(col[4:])
-            sim_pairs.append(f"[{item_id}] = {val}")
+            # simsKnown records every item the sim engine produced a result
+            # for, even a 0% result. sims only carries the numeric value when
+            # non-zero (file-size optimisation); Scoring.lua reads simsKnown
+            # to tell "no data" from "data, value is 0".
+            sim_known_ids.append(item_id)
+            if val != 0.0:
+                sim_pairs.append(f"[{item_id}] = {val}")
         if sim_pairs:
             out.append(f"            sims = {{ {', '.join(sim_pairs)} }},")
         else:
             out.append("            sims = {},")
+        if sim_known_ids:
+            known_pairs = ", ".join(f"[{i}] = true" for i in sim_known_ids)
+            out.append(f"            simsKnown = {{ {known_pairs} }},")
+        else:
+            out.append("            simsKnown = {},")
 
         out.append("        },")
 
@@ -513,8 +524,12 @@ def fetch_rows(
                         if not isinstance(iid, int):
                             continue
                         score = _best_wishlist_score(item)
-                        prev  = sims_by_id[cid].get(iid, 0.0)
-                        if score > prev:
+                        # First sighting wins; later sightings only overwrite
+                        # when strictly greater. This ensures a 0.0 result is
+                        # recorded (so simsKnown picks it up downstream)
+                        # instead of being silently dropped by `score > prev`
+                        # when prev defaulted to 0.0.
+                        if iid not in sims_by_id[cid] or score > sims_by_id[cid][iid]:
                             sims_by_id[cid][iid] = score
 
     # --- assemble rows ---

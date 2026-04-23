@@ -19,6 +19,23 @@ local addon   -- set by Setup
 local frame   -- top-level Frame (nil until BuildFrames)
 local built   -- bool: have we called BuildFrames yet?
 
+-- Coalesce rapid LootHistory:Apply calls (slider drags can fire dozens
+-- of `set` callbacks per second; Apply is a full re-scan of saved
+-- variable history and is expensive). Single-shot 0.5s timer; the
+-- closure picks up the latest `addon` at fire time.
+local _applyPending = false
+local function ScheduleLootHistoryApply()
+    if _applyPending then return end
+    if not (ns.LootHistory and ns.LootHistory.Apply) then return end
+    _applyPending = true
+    C_Timer.After(0.5, function()
+        _applyPending = false
+        if addon and ns.LootHistory and ns.LootHistory.Apply then
+            ns.LootHistory:Apply(addon)
+        end
+    end)
+end
+
 local PANEL_W   = 560
 local PANEL_H   = 420
 local TITLEBAR_H = 28
@@ -755,10 +772,9 @@ function BuildTuningTab(parent)
         set = function(v)
             if addon then
                 addon.db.profile.lootHistoryDays = v
-                -- Mirror Config.lua behavior: re-run loot history on change.
-                if ns.LootHistory and ns.LootHistory.Apply then
-                    ns.LootHistory:Apply(addon)
-                end
+                -- Mirror Config.lua behavior: re-run loot history on change
+                -- (debounced — see ScheduleLootHistoryApply).
+                ScheduleLootHistoryApply()
             end
         end,
     })
@@ -805,9 +821,7 @@ function BuildLootDBTab(parent)
             set = function(v)
                 if not addon then return end
                 addon.db.profile.lootWeights[row.key] = v
-                if ns.LootHistory and ns.LootHistory.Apply then
-                    ns.LootHistory:Apply(addon)
-                end
+                ScheduleLootHistoryApply()
             end,
         })
     end
@@ -821,9 +835,7 @@ function BuildLootDBTab(parent)
         set = function(v)
             if not addon then return end
             addon.db.profile.lootMinIlvl = v
-            if ns.LootHistory and ns.LootHistory.Apply then
-                ns.LootHistory:Apply(addon)
-            end
+            ScheduleLootHistoryApply()
         end,
     })
 

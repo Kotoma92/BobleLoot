@@ -13,8 +13,18 @@ local addon  -- set in Setup
 
 -- ── LDB object ────────────────────────────────────────────────────────
 
-local LDB = LibStub("LibDataBroker-1.1")
-local DBIcon = LibStub("LibDBIcon-1.0")
+-- Use silent LibStub lookups so a missing/corrupt Libs/ folder degrades
+-- to "no minimap button" instead of breaking addon load entirely.
+local LDB    = LibStub("LibDataBroker-1.1", true)
+local DBIcon = LibStub("LibDBIcon-1.0",    true)
+
+if not LDB or not DBIcon then
+    function MB:Setup() end                -- no-op stubs
+    function MB:ToggleMinimapIcon() end
+    function MB:ShowDropdown() end
+    function MB:BuildTooltip() end
+    return
+end
 
 local ldbObj = LDB:NewDataObject("BobleLoot", {
     type  = "launcher",
