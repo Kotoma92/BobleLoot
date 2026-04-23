@@ -21,6 +21,30 @@ BobleLoot.version = "1.3.0"
 -- Pruned by BobleLoot:PrunePendingAwards.
 BobleLoot._pendingAwards = BobleLoot._pendingAwards or {}
 
+-- StaticPopup for /bl importpaste (roadmap 4.3).
+-- Defined at module level so it is registered once during addon load.
+-- BobleLoot is referenced by the global _G.BobleLoot; safe because StaticPopup
+-- callbacks fire at interaction time, long after addon initialisation.
+StaticPopupDialogs["BOBLELOOT_IMPORT_PASTE"] = {
+    text = "Paste BobleLoot export JSON below:\n(use /bl importpaste to open)",
+    button1 = "Import",
+    button2 = "Cancel",
+    hasEditBox = true,
+    editBoxWidth = 500,
+    maxLetters = 0,           -- no limit; JSON bundles can be several KB
+    OnAccept = function(self)
+        local text = self.editBox and self.editBox:GetText()
+                     or self.EditBox and self.EditBox:GetText()
+                     or ""
+        BobleLoot:DoImportPaste(text)
+    end,
+    OnCancel = function() end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+}
+
 local DB_DEFAULTS = {
     profile = {
         -- Migration framework (item 2.7): tracks the last migration version
@@ -323,6 +347,84 @@ function BobleLoot:GetData()
     return _G.BobleLoot_Data
 end
 
+-- Import a dataset from a pasted JSON bundle (roadmap 4.3).
+-- Called by the BOBLELOOT_IMPORT_PASTE StaticPopup OnAccept handler
+-- and by /bl importpaste (via DoImportPaste directly, for testing).
+function BobleLoot:DoImportPaste(text)
+    local function fireResult(ok, msg)
+        -- Route through Batch 3E toast system if available; fall back to Print.
+        if self.SendMessage then
+            self:SendMessage("BobleLoot_ImportResult", ok, msg)
+        end
+        self:Print((ok and "|cff00ff00" or "|cffff5555") .. msg .. "|r")
+    end
+
+    text = text and (text:gsub("^%s*(.-)%s*$", "%1")) or ""
+    if text == "" then
+        fireResult(false, "Import failed: paste is empty.")
+        return
+    end
+
+    -- Parse JSON via dkjson (loaded via Libs.xml before Core.lua).
+    if not _G.dkjson then
+        fireResult(false, "Import failed: dkjson library not loaded.")
+        return
+    end
+    local ok, bundle = pcall(_G.dkjson.decode, text)
+    if not ok or type(bundle) ~= "table" then
+        fireResult(false, "Import failed: JSON parse error.")
+        return
+    end
+
+    -- Schema validation.
+    if bundle.schema ~= "bobleloot-export-v1" then
+        fireResult(false, "Import failed: not a BobleLoot bundle (schema mismatch).")
+        return
+    end
+    if type(bundle.characters) ~= "table" then
+        fireResult(false, "Import failed: bundle missing 'characters' table.")
+        return
+    end
+
+    local charCount = 0
+    for _ in pairs(bundle.characters) do charCount = charCount + 1 end
+    if charCount == 0 then
+        fireResult(false, "Imported bundle has 0 characters — check the export.")
+        return
+    end
+
+    -- Build a data table in the same shape Sync.lua and Scoring.lua expect.
+    local data = {
+        characters  = bundle.characters,
+        generatedAt = bundle.generatedAt or bundle.exportedAt or "imported",
+        teamUrl     = bundle.teamUrl,
+        simCap      = bundle.scoringConfig and bundle.scoringConfig.simCap or 5.0,
+        mplusCap    = bundle.scoringConfig and bundle.scoringConfig.mplusCap or 40,
+        historyCap  = bundle.scoringConfig and bundle.scoringConfig.historyCap or 5,
+        _imported   = true,  -- flag so diagnostics can distinguish imported data
+    }
+
+    -- Load into live globals and SyncDB.
+    _G.BobleLoot_Data = data
+    _G.BobleLootSyncDB = _G.BobleLootSyncDB or {}
+    _G.BobleLootSyncDB.data = data
+
+    -- Re-apply loot history against the new dataset.
+    if ns.LootHistory and ns.LootHistory.Apply then
+        C_Timer.After(0.5, function() ns.LootHistory:Apply(self) end)
+    end
+
+    -- Broadcast to the raid (Batch 1C contract: BroadcastNow -> SendHello).
+    if ns.Sync and ns.Sync.BroadcastNow then
+        ns.Sync:BroadcastNow(self)
+        fireResult(true, string.format(
+            "Imported %d characters from bundle. Broadcasting to raid...", charCount))
+    else
+        fireResult(true, string.format(
+            "Imported %d characters from bundle (sync not available).", charCount))
+    end
+end
+
 function BobleLoot:GetScore(itemID, candidateName, opts)
     if not ns.Scoring then return nil end
     local score, breakdown = ns.Scoring:Compute(
@@ -404,6 +506,15 @@ function BobleLoot:OnSlashCommand(input)
         if ns.RaidReminder and ns.RaidReminder.ForceCheck then
             ns.RaidReminder:ForceCheck(self)
         end
+    elseif input == "importpaste" or input == "import" then
+        -- /bl importpaste: open the paste dialog. Leader check is advisory only
+        -- (solo testing should still work without a group).
+        if not UnitIsGroupLeader("player") then
+            self:Print("Note: only the raid/group leader should import a dataset.")
+        end
+        -- File I/O is not available in WoW Lua. The argument after 'import'
+        -- is silently ignored; use the paste dialog instead.
+        StaticPopup_Show("BOBLELOOT_IMPORT_PASTE")
     elseif input == "synthhistory" or input == "synth" then
         -- Diagnostic: list synthetic loot entries from profile.synthHistory (roadmap 4.2).
         local synth = self.db.profile.synthHistory or {}
