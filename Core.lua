@@ -78,6 +78,28 @@ local DB_DEFAULTS = {
         suppressTransparencyLabel = false,  -- 2.11: player hides BL label even when leader enables transparency
         minimap  = { hide = false, minimapPos = 220 },
         panelPos = { point = "CENTER", x = 0, y = 0 },
+        comparePos = { point = "CENTER", x = 0, y = 80 },
+        ghostPresets = {
+            -- "prog" mirrors the user's live weights at first load.
+            -- Seeded at startup from db.profile.weights if weights differ.
+            prog = {
+                sim        = 0.40,
+                bis        = 0.20,
+                history    = 0.15,
+                attendance = 0.15,
+                mplus      = 0.10,
+            },
+            -- "farm" preset: history-heavy for loot-equity-focused decisions.
+            farm = {
+                sim        = 0.30,
+                bis        = 0.10,
+                history    = 0.40,
+                attendance = 0.15,
+                mplus      = 0.05,
+            },
+            -- activeGhostPreset: which preset the toggle button applies.
+            activeGhostPreset = "farm",
+        },
         lastTab  = "weights",
         -- 3.8 score-trend tracking
         trackTrends      = true,        -- leader-side toggle; non-leaders ignore
@@ -136,6 +158,16 @@ function BobleLoot:OnEnable()
     self:RegisterEvent("PARTY_LEADER_CHANGED", function()
         self._leaderScores = nil
     end)
+
+    -- Keep the "prog" ghost preset in sync with the user's current weights
+    -- so it accurately mirrors their live configuration on first load.
+    local gp = self.db.profile.ghostPresets
+    local lw = self.db.profile.weights
+    if gp and lw then
+        for k, v in pairs(lw) do
+            gp.prog[k] = v
+        end
+    end
 
     -- Hook RCLootCouncil if present; otherwise wait for it to load.
     if not self:TryHookRC() then
