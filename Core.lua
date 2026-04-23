@@ -147,6 +147,10 @@ function BobleLoot:OnEnable()
     if ns.LootHistory and ns.LootHistory.Setup then
         ns.LootHistory:Setup(self)
     end
+    -- Catalyst / tier-token synthetic loot tracking (roadmap 4.2).
+    if ns.CatalystTracker and ns.CatalystTracker.Setup then
+        ns.CatalystTracker:Setup(self)
+    end
     if ns.MinimapButton and ns.MinimapButton.Setup then
         ns.MinimapButton:Setup(self)
     end

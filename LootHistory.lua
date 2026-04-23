@@ -824,3 +824,135 @@ function LH:Setup(addon)
         C_Timer.After(2, function() self:Apply(addon) end)
     end)
 end
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- CatalystTracker: synthetic history for catalyst conversions and tier tokens
+-- Roadmap item 4.2.
+--
+-- Detection heuristics (see plan 2026-04-23-batch-4b for full rationale):
+--   Catalyst: NEW_ITEM_ADDED fires while C_ItemInteraction.IsReady() is true.
+--   Tier token: NEW_ITEM_ADDED fires while _vendorOpen is true AND the item
+--               belongs to a gear set (C_Item.GetItemSetInfo returns non-nil).
+--
+-- TODO verify in-game: NEW_ITEM_ADDED fires for catalyst delivery.
+-- TODO verify in-game: C_ItemInteraction.IsReady() name and availability.
+-- TODO verify in-game: C_Item.GetItemSetInfo availability and return shape.
+-- ─────────────────────────────────────────────────────────────────────────
+
+local CatalystTracker = {}
+ns.CatalystTracker = CatalystTracker
+
+-- Session state (not persisted).
+CatalystTracker._vendorOpen       = false
+CatalystTracker._lastCatalystItem = nil  -- dedup: itemID of last catalyst entry recorded
+
+local function isCatalystOpen()
+    -- C_ItemInteraction.IsReady() returns true when the Catalyst frame is active.
+    -- API existence guard: C_ItemInteraction may not exist on older clients.
+    if C_ItemInteraction and C_ItemInteraction.IsReady then
+        return C_ItemInteraction.IsReady() == true
+    end
+    return false
+end
+
+local function getItemSetID(link)
+    -- C_Item.GetItemSetInfo(itemID) returns a table or nil.
+    -- We only need to know if the item belongs to a set.
+    if not C_Item or not C_Item.GetItemSetInfo then return nil end
+    local itemID = link and tonumber(link:match("item:(%d+)"))
+    if not itemID then return nil end
+    local ok, info = pcall(C_Item.GetItemSetInfo, itemID)
+    return (ok and type(info) == "table") and info or nil
+end
+
+-- Write a synthetic entry to BobleLootDB.profile.synthHistory.
+-- synthType: "catalyst" or "tiertoken"
+-- Deduplication: skip if an entry for the same (name, itemID) was recorded
+-- within the last 10 seconds (catches rapid bag-update bursts).
+function CatalystTracker:RecordEntry(addonObj, name, itemLink, itemID, synthType)
+    local profile = addonObj.db.profile
+    profile.synthHistory = profile.synthHistory or {}
+
+    local now = time()
+    -- Dedup: scan recent entries.
+    for i = #profile.synthHistory, math.max(1, #profile.synthHistory - 5), -1 do
+        local e = profile.synthHistory[i]
+        if e and e.name == name and e.itemID == itemID and (now - (e.t or 0)) < 10 then
+            return  -- duplicate within 10s window; discard
+        end
+    end
+
+    local weight = (profile.synthWeight ~= nil) and profile.synthWeight or 0.75
+    table.insert(profile.synthHistory, {
+        name      = name,
+        itemID    = itemID,
+        itemLink  = itemLink or "",
+        t         = now,
+        synthType = synthType,
+        weight    = weight,
+    })
+
+    -- Trigger a history re-apply so scores update immediately.
+    C_Timer.After(1, function()
+        if ns.LootHistory and ns.LootHistory.Apply then
+            ns.LootHistory:Apply(addonObj)
+        end
+    end)
+
+    if addonObj and addonObj.Print then
+        addonObj:Print(string.format(
+            "Synthetic loot recorded: %s received %s via %s (weight=%.2f)",
+            name, tostring(itemLink or itemID), synthType, weight))
+    end
+end
+
+function CatalystTracker:Setup(addonObj)
+    self.addon = addonObj
+    local playerName = UnitName("player") .. "-" .. (GetRealmName and GetRealmName():gsub("%s+", "") or "")
+
+    local f = CreateFrame("Frame")
+    -- Tier-token gate: track vendor open/close state.
+    f:RegisterEvent("MERCHANT_SHOW")
+    f:RegisterEvent("MERCHANT_CLOSED")
+    -- Primary item-acquisition signal.
+    -- NEW_ITEM_ADDED fires (bagID, slotID) when a new item arrives in bags.
+    -- TODO verify in-game: confirm this event fires for catalyst deliveries.
+    f:RegisterEvent("NEW_ITEM_ADDED")
+
+    f:SetScript("OnEvent", function(_, event, arg1, arg2)
+        if event == "MERCHANT_SHOW" then
+            CatalystTracker._vendorOpen = true
+            return
+        end
+        if event == "MERCHANT_CLOSED" then
+            CatalystTracker._vendorOpen = false
+            return
+        end
+        if event == "NEW_ITEM_ADDED" then
+            local bagID, slotID = arg1, arg2
+            -- Determine detection path.
+            local synthType = nil
+            if isCatalystOpen() then
+                synthType = "catalyst"
+            elseif CatalystTracker._vendorOpen then
+                -- Only record vendor-acquired items that are tier set pieces.
+                local link = C_Container and C_Container.GetContainerItemLink(bagID, slotID)
+                             or GetContainerItemLink(bagID, slotID)
+                if link and getItemSetID(link) then
+                    synthType = "tiertoken"
+                end
+            end
+
+            if not synthType then return end
+
+            -- Get item info.
+            local link = C_Container and C_Container.GetContainerItemLink(bagID, slotID)
+                         or GetContainerItemLink(bagID, slotID)
+            if not link then return end
+            local itemID = tonumber(link:match("item:(%d+)"))
+            if not itemID then return end
+
+            CatalystTracker:RecordEntry(addonObj, playerName, link, itemID, synthType)
+        end
+    end)
+end
