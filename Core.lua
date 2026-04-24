@@ -182,8 +182,19 @@ function BobleLoot:OnEnable()
         ns.HistoryViewer:Setup(self)
     end
     -- Great Vault collection tracking (Batch 2.4).
+    -- WEEKLY_REWARDS_ITEM_GRABBED does not exist in retail; the real
+    -- events are WEEKLY_REWARDS_ITEM_CHANGED / WEEKLY_REWARDS_UPDATE,
+    -- neither of which carries the grabbed item's payload — the handler
+    -- would need to diff vault state across calls. Guard the register
+    -- so a bad event name cannot abort OnEnable; vault auto-tracking is
+    -- dormant until a follow-up replaces this with a working signal.
     if C_WeeklyRewards then
-        self:RegisterEvent("WEEKLY_REWARDS_ITEM_GRABBED", "OnVaultItemGrabbed")
+        local okEvt = pcall(self.RegisterEvent, self,
+            "WEEKLY_REWARDS_ITEM_GRABBED", "OnVaultItemGrabbed")
+        if not okEvt then
+            self:Print("|cffff9900[BobleLoot]|r vault auto-tracking "
+                .. "disabled (WEEKLY_REWARDS_ITEM_GRABBED not supported).")
+        end
     end
 
     -- Wasted-loot trade detection (3.5).

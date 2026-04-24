@@ -1023,9 +1023,21 @@ function CatalystTracker:Setup(addonObj)
     f:RegisterEvent("MERCHANT_SHOW")
     f:RegisterEvent("MERCHANT_CLOSED")
     -- Primary item-acquisition signal.
-    -- NEW_ITEM_ADDED fires (bagID, slotID) when a new item arrives in bags.
-    -- TODO verify in-game: confirm this event fires for catalyst deliveries.
-    f:RegisterEvent("NEW_ITEM_ADDED")
+    -- NEW_ITEM_ADDED was assumed to fire (bagID, slotID) on new bag items,
+    -- but that event does not exist in retail. Valid alternatives have
+    -- different payloads (ITEM_PUSH → bagSlot, iconFileID ;
+    -- BAG_NEW_ITEMS_UPDATED → no payload) and would need a full rewrite
+    -- of the detection logic below. Guard the register so an invalid
+    -- event does not abort OnEnable; catalyst auto-tracking is dormant
+    -- until a follow-up replaces this with a working signal.
+    local okEvt = pcall(f.RegisterEvent, f, "NEW_ITEM_ADDED")
+    if not okEvt then
+        CatalystTracker._autoDetectDisabled = true
+        if addonObj and addonObj.Print then
+            addonObj:Print("|cffff9900[BobleLoot]|r catalyst auto-tracking "
+                .. "disabled (NEW_ITEM_ADDED not supported).")
+        end
+    end
 
     f:SetScript("OnEvent", function(_, event, arg1, arg2)
         if event == "MERCHANT_SHOW" then
