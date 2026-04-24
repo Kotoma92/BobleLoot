@@ -38,6 +38,7 @@ globals = {
     "GetServerTime",
     "GetTime",
     "GetTradePlayerItemInfo",
+    "GetTradePlayerItemLink",
     "HideUIPanel",
     "InterfaceOptions_AddCategory",
     "IsInGroup",

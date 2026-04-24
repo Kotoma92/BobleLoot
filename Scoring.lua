@@ -244,7 +244,7 @@ function Scoring:ComputeAll(itemID, profile, data, opts)
     for charName, _ in pairs(data.characters) do
         local score, breakdown = self:Compute(itemID, charName, profile, data, opts)
         if score ~= nil then
-            results[#results + 1] = { name = name, score = score, breakdown = breakdown }
+            results[#results + 1] = { name = charName, score = score, breakdown = breakdown }
         end
     end
 
