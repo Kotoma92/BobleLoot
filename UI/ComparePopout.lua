@@ -337,7 +337,10 @@ function CP:Setup(addon)
                 and ns.ComparePopout:IsShown() then
                 if ns.ComparePopout._lastArgs then
                     pcall(function()
-                        ns.ComparePopout:Open(table.unpack(ns.ComparePopout._lastArgs))
+                        -- WoW Lua is 5.1-base; unpack is the global. Some
+                        -- retail builds also alias table.unpack, but not
+                        -- all — stick to the canonical form.
+                        ns.ComparePopout:Open(unpack(ns.ComparePopout._lastArgs))
                     end)
                 end
             end

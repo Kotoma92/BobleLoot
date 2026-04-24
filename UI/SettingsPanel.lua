@@ -864,7 +864,9 @@ function BuildTuningTab(parent)
     synthLabel:SetText("Synthetic history (catalyst/token) weight")
     synthLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
 
-    local synthWeightSld = MakeSlider(inner, {
+    -- No `local` — the outer forward-decl on line 751 owns this binding
+    -- so the OnShow refresh below can restore the slider value.
+    synthWeightSld = MakeSlider(inner, {
         label   = "Synth weight",
         min     = 0,
         max     = 2.0,
@@ -1091,6 +1093,9 @@ function BuildTuningTab(parent)
         if simCapSld   then simCapSld:SetEnabled(oc)   end
         if mplusCapSld then mplusCapSld:SetEnabled(oc) end
         if histCapSld  then histCapSld:SetEnabled(oc)  end
+        if synthWeightSld then
+            synthWeightSld:SetValue(addon.db.profile.synthWeight or 0.75)
+        end
         -- 2.10: refresh conflict threshold display.
         if conflictSld then
             local ct = addon.db.profile.conflictThreshold or 5

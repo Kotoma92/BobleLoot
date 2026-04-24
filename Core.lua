@@ -275,8 +275,10 @@ function BobleLoot:OnTradeClosed()
     if not profile then return end
 
     -- Inspect items the local player gave away (up to 7 trade slots).
+    -- GetTradePlayerItemInfo returns name/texture/count/quality/enchant/
+    -- canLoseTransmog — no link. The link lives on GetTradePlayerItemLink.
     for slot = 1, 7 do
-        local _, _, _, _, link = GetTradePlayerItemInfo(slot)
+        local link = GetTradePlayerItemLink(slot)
         if link then
             local itemID = C_Item and C_Item.GetItemInfoInstant and
                 select(2, C_Item.GetItemInfoInstant(link))

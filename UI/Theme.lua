@@ -101,12 +101,18 @@ function Theme:SetColorMode(mode)
         Theme.ScoreColorRelative = Theme._ScoreColorRelativeDefault
     end
 
-    -- Notify all registered consumers.
+    -- Notify all registered consumers. A broken consumer is logged but
+    -- must NOT abort the loop — re-throwing here would skip every
+    -- later-registered consumer and leave the UI in a half-swapped state
+    -- (e.g. SettingsPanel palette updated, Toast palette stale).
     for _, fn in ipairs(_colorModeConsumers) do
         local ok, err = pcall(fn)
         if not ok then
-            -- Never let a broken consumer silently swallow the mode swap.
-            error("BobleLoot Theme consumer error: " .. tostring(err), 2)
+            local msg = "|cffff5555[BobleLoot Theme]|r consumer error: "
+                     .. tostring(err)
+            if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+                DEFAULT_CHAT_FRAME:AddMessage(msg)
+            end
         end
     end
 end

@@ -969,8 +969,12 @@ function VF:Hook(addon, RC)
             _sessionStats = {}
             -- For immediate visual update if the voting frame is currently visible:
             if rcVoting and rcVoting.frame and rcVoting.frame:IsShown() then
-                if rcVoting.scrollTable and rcVoting.scrollTable.Refresh then
-                    pcall(function() rcVoting.scrollTable:Refresh() end)
+                -- Every other hook site in this file reads the scroll
+                -- table as rcVoting.frame.st; the field rcVoting.scrollTable
+                -- is never populated, so this guard never fired.
+                local st = rcVoting.frame.st
+                if st and st.Refresh then
+                    pcall(function() st:Refresh() end)
                 end
             end
         end)

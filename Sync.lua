@@ -932,7 +932,11 @@ function Sync:Setup(addon)
         end
     end
 
-    addon:RegisterComm(PREFIX, function(_, prefix, message, dist, sender)
+    -- CallbackHandler-1.0 invokes function-form handlers as
+    -- fn(prefix, message, distribution, sender) — no implicit self. An
+    -- earlier version had a leading `_` placeholder which ate `prefix`,
+    -- silently dropping every incoming sync message.
+    addon:RegisterComm(PREFIX, function(prefix, message, dist, sender)
         Sync:OnComm(addon, prefix, message, dist, sender)
     end)
 

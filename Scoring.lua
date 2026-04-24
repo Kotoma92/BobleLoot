@@ -225,9 +225,13 @@ end
 -- Characters with nil scores (missing sim data when sim weight > 0,
 -- or no character entry at all) are excluded from the result.
 -- `profile` defaults to addon.db.profile if ns.addon is available.
+-- `data`   defaults to _G.BobleLoot_Data; callers (e.g. /bl benchscore)
+--          may pass a freshly-synced dataset via addon:GetData() so
+--          bench scores use the newer data even before it is promoted
+--          to the global.
 -- `opts` is forwarded to Compute unchanged (simReference, historyReference, etc).
-function Scoring:ComputeAll(itemID, profile, opts)
-    local data = _G.BobleLoot_Data
+function Scoring:ComputeAll(itemID, profile, data, opts)
+    data = data or _G.BobleLoot_Data
     if not data or not data.characters then return {} end
 
     if not profile then
@@ -237,8 +241,8 @@ function Scoring:ComputeAll(itemID, profile, opts)
     if not profile then return {} end
 
     local results = {}
-    for name, _ in pairs(data.characters) do
-        local score, breakdown = self:Compute(itemID, name, profile, data, opts)
+    for charName, _ in pairs(data.characters) do
+        local score, breakdown = self:Compute(itemID, charName, profile, data, opts)
         if score ~= nil then
             results[#results + 1] = { name = name, score = score, breakdown = breakdown }
         end
