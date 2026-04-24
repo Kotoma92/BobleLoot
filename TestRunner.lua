@@ -35,6 +35,16 @@ local FALLBACK_ITEMS = {
     212406, 212407, 212408, 212409, 212410,
 }
 
+-- To exercise the confirmed-zero score case:
+--   1. In _G.BobleLoot_Data.characters, find any character entry.
+--   2. Set char.sims = {} (empty, so simComponent returns nil).
+--   3. Set char.bis = {} (not on BiS list -> partialBiSValue, e.g. 0.25).
+--   4. Set char.itemsReceived = 999 (so historyComponent returns ~0).
+--   5. Set char.attendance = 0, char.mplusDungeons = 0.
+--   6. Run a test session; that character should show "0" not "-".
+-- If weights.sim > 0 Scoring returns nil (excluded), so set weights.sim = 0
+-- in db.profile.weights when testing this path.
+
 local function shuffle(t)
     for i = #t, 2, -1 do
         local j = math.random(i)
@@ -87,6 +97,64 @@ local function getRC()
     local ok, RC = pcall(function() return AceAddon:GetAddon("RCLootCouncil", true) end)
     if not ok then return nil end
     return RC
+end
+
+-- ── Batch 3D: ComparePopout + Ghost Weights tests ────────────────────
+
+BobleLoot.Test3D = {}
+
+-- Opens the comparison popout with two hardcoded names for layout testing.
+-- Call from chat: /run BobleLoot.Test3D.OpenCompare()
+function BobleLoot.Test3D.OpenCompare()
+    local cp = ns.ComparePopout
+    if not cp then
+        print("|cffff5555BobleLoot Test3D:|r ComparePopout module not loaded.")
+        return
+    end
+    -- Use the first two characters from the dataset as test subjects.
+    local data = BobleLoot:GetData()
+    local nameA, nameB
+    if data and data.characters then
+        for n in pairs(data.characters) do
+            if not nameA then nameA = n
+            elseif not nameB then nameB = n
+            end
+            if nameA and nameB then break end
+        end
+    end
+    nameA = nameA or "TestA-Realm"
+    nameB = nameB or "TestB-Realm"
+    local itemID = (function()
+        -- Grab any itemID from the dataset.
+        local d = BobleLoot:GetData()
+        if d and d.characters then
+            for _, c in pairs(d.characters) do
+                if c.sims then
+                    for id in pairs(c.sims) do return id end
+                end
+            end
+        end
+        return 0
+    end)()
+    print(string.format(
+        "|cff33D9F2BobleLoot Test3D:|r Opening popout: %s vs %s on item %d",
+        nameA, nameB, itemID or 0))
+    cp:Open(nameA, nameB, itemID, nil, {})
+end
+
+-- Toggles ghost mode and prints the active state.
+-- Call from chat: /run BobleLoot.Test3D.ToggleGhost()
+function BobleLoot.Test3D.ToggleGhost()
+    local VF = ns.VotingFrame
+    if not VF then
+        print("|cffff5555BobleLoot Test3D:|r VotingFrame module not loaded.")
+        return
+    end
+    VF.SetGhostMode(not VF.ghostMode)
+    print(string.format(
+        "|cff33D9F2BobleLoot Test3D:|r Ghost mode is now: %s (preset: %s)",
+        VF.ghostMode and "ACTIVE" or "OFF",
+        (BobleLoot.db.profile.ghostPresets.activeGhostPreset or "farm")))
 end
 
 function Test:Run(addon, count, useDataset)

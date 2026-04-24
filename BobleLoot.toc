@@ -2,22 +2,31 @@
 ## Title: Boble Loot
 ## Notes: Adds a 0-100 candidate score column to RCLootCouncil based on WoWAudit sims, BiS lists, attendance, M+ score and loot history.
 ## Author: <your-guild>
-## Version: 1.0.3
-## OptionalDeps: RCLootCouncil
+## Version: 2.0.0-dev
+## OptionalDeps: RCLootCouncil, AceTimer-3.0
 ## SavedVariables: BobleLootDB, BobleLootSyncDB
 ## X-Category: Raid
 ## IconTexture: Interface\Icons\inv_misc_dice_01
 
-embeds.xml
+Libs\Libs.xml
 
 Data\BobleLoot_Data.lua
 
+Migrations.lua
 Core.lua
 Scoring.lua
-Config.lua
 Sync.lua
+RCCompat.lua
 VotingFrame.lua
 LootFrame.lua
 RaidReminder.lua
-TestRunner.lua
 LootHistory.lua
+TestRunner.lua
+
+UI\Theme.lua
+UI\Toast.lua
+UI\HistoryViewer.lua
+UI\ComparePopout.lua
+UI\SettingsPanel.lua
+UI\MinimapButton.lua
+UI\ExplainPanel.lua

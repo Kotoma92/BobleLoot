@@ -14,15 +14,37 @@ local _, ns = ...
 local VF = {}
 ns.VotingFrame = VF
 
+-- Ghost-weights preview state (3.10).
+-- When true, doCellUpdate uses VF._ghostWeights instead of db.profile.weights.
+VF.ghostMode     = false
+VF._ghostWeights = nil  -- populated from ghostPresets.farm (or activeGhostPreset)
+                         -- when the toggle button is pressed.
+
 local SCORE_COL = "blScore"
 
--- Pull the current itemID for a session safely.
+-- Tracks which sessions have had Notes written this instance so we
+-- write once per session, not on every scroll update.
+local _noteWrittenForSession = {}
+
+-- Resolved after Scoring.lua loads; both modules are in the same TOC frame.
+local DEFAULT_COMPONENT_ORDER = { "sim", "bis", "history", "attendance", "mplus" }
+local function getComponentOrder()
+    return (ns.Scoring and ns.Scoring.COMPONENT_ORDER) or DEFAULT_COMPONENT_ORDER
+end
+local function getComponentLabel() return ns.Scoring.COMPONENT_LABEL end
+
+-- Pull the current itemID for a session using the version-compat resolver.
 local function getItemIDForSession(rcVoting, session)
-    local lt = rcVoting.GetLootTable and rcVoting:GetLootTable()
+    local resolver = VF.resolver
+    if resolver and resolver.sessionItemID then
+        local ok, id = pcall(resolver.sessionItemID, rcVoting, session)
+        if ok and id then return id end
+    end
+    -- Fallback: inline probe for safety during early startup before Detect().
+    local lt = (rcVoting.GetLootTable and rcVoting:GetLootTable())
+               or rawget(rcVoting, "lootTable")
     if not lt or not lt[session] then return nil end
     local entry = lt[session]
-    -- RCLootCouncil stores either `link` or `string` plus `id` depending
-    -- on version; try the cheap paths first.
     if entry.link then
         local id = tonumber(entry.link:match("item:(%d+)"))
         if id then return id end
@@ -106,26 +128,160 @@ local function computeScoreForRow(rcVoting, addon, session, name, simReference, 
     })
 end
 
-local function formatScore(score)
-    if not score then return "|cff666666-|r" end
-    -- Color ramp: red (<40) -> yellow (<70) -> green (>=70)
-    local color
-    if score >= 70 then     color = "|cff40ff40"
-    elseif score >= 40 then color = "|cffffd040"
-    else                    color = "|cffff5050"
-    end
-    return string.format("%s%d|r", color, math.floor(score + 0.5))
+-- Returns true when `name` has an entry in the current dataset.
+local function isInDataset(addon, name)
+    local data = addon:GetData()
+    if not data or not data.characters then return false end
+    return data.characters[name] ~= nil
 end
 
--- Ordered display metadata for the tooltip.
-local COMPONENT_ORDER = { "sim", "bis", "history", "attendance", "mplus" }
-local COMPONENT_LABEL = {
-    sim        = "Sim upgrade",
-    bis        = "BiS",
-    history    = "Loot received",
-    attendance = "Attendance",
-    mplus      = "M+ dungeons",
-}
+-- Per-render-pass cache for session median and max. Recomputed whenever
+-- doCellUpdate is called for row 1 (the first row triggers the full pass).
+-- Keyed by (session, itemID) so stale data from a previous item is evicted
+-- even if RCLootCouncil reuses the same session slot for a different item.
+local _sessionStats = {}   -- { session = N, itemID = I, median = X, max = Y }
+
+local function computeSessionStats(rcVoting, addon, session, tableData)
+    local itemID  = getItemIDForSession(rcVoting, session)
+
+    -- Return cached value if same (session, itemID).
+    if _sessionStats.session == session
+       and _sessionStats.itemID  == itemID
+       and _sessionStats.median ~= nil then
+        return _sessionStats.median, _sessionStats.max
+    end
+
+    local names   = bidderNames(rcVoting, session, tableData)
+    local simRef  = simReferenceFor(addon, itemID, names)
+    local histRef = historyReferenceFor(addon, names)
+
+    local scores = {}
+    local data = addon:GetData()
+    if data and data.characters and names then
+        for _, n in ipairs(names) do
+            local s = computeScoreForRow(rcVoting, addon, session, n, simRef, histRef)
+            if s then scores[#scores + 1] = s end
+        end
+    end
+
+    local median, max
+    if #scores > 0 then
+        table.sort(scores)
+        max = scores[#scores]
+        local mid = math.floor(#scores / 2)
+        if #scores % 2 == 1 then
+            median = scores[mid + 1]
+        else
+            median = (scores[mid] + scores[mid + 1]) / 2
+        end
+    end
+
+    -- 2.10: also build a name->score map for O(1) lookup in doCellUpdate
+    -- and store the sorted scores list for isConflict(). Reuses the
+    -- simRef/histRef already computed above — no second traversal.
+    local nameToScore = {}
+    if names then
+        for _, n in ipairs(names) do
+            local s = computeScoreForRow(rcVoting, addon, session, n, simRef, histRef)
+            if s then nameToScore[n] = s end
+        end
+    end
+
+    _sessionStats = {
+        session      = session,
+        itemID       = itemID,
+        median       = median,
+        max          = max,
+        sortedScores = scores,    -- already sorted ascending
+        nameToScore  = nameToScore,
+    }
+    return median, max
+end
+
+-- 2.10: Returns true when `score` is within `threshold` of any other score
+-- in the sorted list. Uses a linear scan — O(k) where k = number of
+-- candidates within threshold, which is nearly always 0-2 in practice.
+local function isConflict(stats, score, threshold)
+    if not stats or not stats.sortedScores or #stats.sortedScores < 2 then
+        return false
+    end
+    for _, s in ipairs(stats.sortedScores) do
+        if s ~= score and math.abs(s - score) <= threshold then
+            return true
+        end
+    end
+    return false
+end
+
+local FRESHNESS_WARN_SECS  = 72 * 3600       -- 72 hours
+local FRESHNESS_DANGER_SECS = 7 * 24 * 3600  -- 7 days
+
+-- Returns nil (fresh), "warning", or "danger" based on dataset age.
+local function datasetFreshnessState()
+    local d = _G.BobleLoot_Data
+    if not d or not d.generatedAtTimestamp then return nil end
+    local age = time() - d.generatedAtTimestamp
+    if age >= FRESHNESS_DANGER_SECS then return "danger" end
+    if age >= FRESHNESS_WARN_SECS   then return "warning" end
+    return nil
+end
+
+-- Format age in a human-readable string: "3 days 4 hours" etc.
+local function formatAge(secs)
+    local days  = math.floor(secs / 86400)
+    local hours = math.floor((secs % 86400) / 3600)
+    if days > 0 then
+        return string.format("%d day%s %d hour%s",
+            days,  days  == 1 and "" or "s",
+            hours, hours == 1 and "" or "s")
+    end
+    return string.format("%d hour%s", hours, hours == 1 and "" or "s")
+end
+
+-- score    : number | nil   (nil = Scoring:Compute returned nil)
+-- inDataset: bool           (true = character row exists in dataset)
+-- median   : number | nil   (session median across all scored candidates)
+-- max      : number | nil   (session maximum across all scored candidates)
+-- conflict : bool | nil     (2.10: true = within conflictThreshold of another candidate)
+local function formatScore(score, inDataset, median, max, conflict)
+    if not inDataset then
+        -- Character is not in the dataset at all.
+        local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
+        return string.format("|cff%02x%02x%02x\xe2\x80\x94|r",
+            math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255))
+    end
+    if not score then
+        -- In dataset but Scoring:Compute returned nil (sim-weight=0 and
+        -- no other data, or literally all components missing).
+        -- Use Theme.muted dynamically so colorblind palette swaps apply.
+        local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
+        return string.format("|cff%02x%02x%02x?|r",
+            math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255))
+    end
+    -- score is a real number (including 0.0).
+    -- 2.10: build the ~ conflict prefix in Theme.muted color.
+    local prefix = ""
+    if conflict then
+        local m = ns.Theme and ns.Theme.muted or {0.55, 0.55, 0.55, 1}
+        prefix = string.format("|cff%02x%02x%02x~|r",
+            math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255))
+    end
+    local c = (ns.Theme and ns.Theme.ScoreColorRelative)
+              and ns.Theme.ScoreColorRelative(score, median, max)
+              or  (ns.Theme and ns.Theme.ScoreColor and ns.Theme.ScoreColor(score))
+    if c then
+        return prefix .. string.format("|cff%02x%02x%02x%d|r",
+            math.floor(c[1]*255), math.floor(c[2]*255), math.floor(c[3]*255),
+            math.floor(score + 0.5))
+    end
+    -- Fallback if Theme not yet loaded (should not happen in practice).
+    local hex
+    if score >= 70 then     hex = "40ff40"
+    elseif score >= 40 then hex = "ffd040"
+    else                    hex = "ff5050"
+    end
+    return prefix .. string.format("|cff%s%d|r", hex, math.floor(score + 0.5))
+end
 
 -- Format the raw underlying stat for one component.
 local function formatRaw(key, entry)
@@ -174,34 +330,95 @@ local function formatRaw(key, entry)
     return "-"
 end
 
-local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef)
+-- Expose for LootFrame.lua's transparency tooltip.
+VF.formatRaw = formatRaw
+
+function VF.SetGhostMode(active)
+    -- 3B seam: if ns.Scoring.ComputeAll(itemID, altWeights) is available,
+    -- a single pre-pass could cache all ghost scores here and avoid the
+    -- per-cell weight swap. The current approach is correct; optimize in
+    -- a follow-up when 3B is merged.
+    VF.ghostMode = active
+    if active then
+        local addon = VF.addon
+        if addon and addon.db then
+            local gp     = addon.db.profile.ghostPresets
+            local preset = gp and gp[gp.activeGhostPreset or "farm"]
+            VF._ghostWeights = preset or (gp and gp.farm)
+        end
+    else
+        VF._ghostWeights = nil
+    end
+    -- Invalidate the session stats cache so scores recompute.
+    _sessionStats = {}
+    -- Force a refresh of the lib-st table.
+    local rcVoting = VF.rcVoting
+    if rcVoting and rcVoting.frame and rcVoting.frame.st then
+        pcall(function() rcVoting.frame.st:Refresh() end)
+    end
+end
+
+local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef,
+                                 sessionMedian, sessionMax)
+    local inDs = isInDataset(addon, name)
+    if not inDs then
+        tt:AddLine("|cffddddddBoble Loot|r")
+        tt:AddLine(" ")
+        tt:AddLine(string.format(
+            "|cffaaaaaa%s is not in the BobleLoot dataset.|r", name or "?"))
+        tt:AddLine("|cff888888Run tools/wowaudit.py and /reload.|r")
+        return
+    end
+
     local s, breakdown = addon:GetScore(itemID, name, {
         simReference     = simRef,
         historyReference = histRef,
     })
-    tt:AddLine("Boble Loot")
-    tt:AddDoubleLine(name or "?",
+
+    -- Title + separator
+    tt:AddLine("|cffddddddBoble Loot|r")
+    tt:AddLine("|cff444444" .. string.rep("\xe2\x80\x94", 26) .. "|r")
+
+    -- Name + total score
+    tt:AddDoubleLine(
+        name or "?",
         s and string.format("%.1f / 100", s) or "|cffff7070no data|r",
-        1, 0.82, 0, 1, 1, 1)
+        1, 0.82, 0,   1, 1, 1)
+
     if not s then
-        tt:AddLine("|cffff7070No data for this candidate/item.|r")
+        tt:AddLine("|cffff7070No scoreable components for this candidate/item.|r")
         return
     end
 
     tt:AddLine(" ")
-    tt:AddLine("|cffaaaaaaComponent          weight  norm   = pts|r")
 
-    local sumContrib = 0
-    for _, key in ipairs(COMPONENT_ORDER) do
+    -- Column header row (muted)
+    tt:AddDoubleLine(
+        "|cff666666Component           (raw stat)|r",
+        "|cff666666wt%    norm   =  pts|r",
+        1, 1, 1,  1, 1, 1)
+
+    local sumContrib   = 0
+    local activeCount  = 0
+    local totalConfigW = 0
+    local order  = ns.Scoring.COMPONENT_ORDER
+    local labels = ns.Scoring.COMPONENT_LABEL
+    local weights = addon.db and addon.db.profile and addon.db.profile.weights or {}
+
+    for _, key in ipairs(order) do
+        totalConfigW = totalConfigW + (weights[key] or 0)
+    end
+
+    for _, key in ipairs(order) do
         local e = breakdown[key]
         if e then
-            sumContrib = sumContrib + (e.contribution or 0)
-            local left = string.format(
-                "%s |cff888888(%s)|r",
-                COMPONENT_LABEL[key] or key,
-                formatRaw(key, e))
-            local right = string.format(
-                "|cffcccccc%2.0f%%|r x |cffcccccc%.2f|r = |cffffffff%4.1f|r",
+            activeCount  = activeCount + 1
+            sumContrib   = sumContrib + (e.contribution or 0)
+            local rawStr = formatRaw(key, e)
+            local left   = string.format("%s |cff666666(%s)|r",
+                               labels[key] or key, rawStr)
+            local right  = string.format(
+                "|cffcccccc%2.0f%%|r  |cff6699ff%.2f|r  |cff888888=|r  |cffffffff%4.1f|r",
                 (e.effectiveWeight or 0) * 100,
                 e.value or 0,
                 e.contribution or 0)
@@ -209,23 +426,56 @@ local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef)
         end
     end
 
-    -- List components that were dropped (no data or weight 0) so the
-    -- raid leader knows the renormalization is doing work.
-    local missing = {}
-    for _, key in ipairs(COMPONENT_ORDER) do
+    -- Excluded components
+    local excluded = {}
+    for _, key in ipairs(order) do
         if not breakdown[key] then
-            table.insert(missing, COMPONENT_LABEL[key] or key)
+            table.insert(excluded, labels[key] or key)
         end
-    end
-    if #missing > 0 then
-        tt:AddLine(" ")
-        tt:AddLine("|cff808080Excluded (no data or weight 0): "
-            .. table.concat(missing, ", ") .. "|r")
     end
 
     tt:AddLine(" ")
-    tt:AddDoubleLine("Total", string.format("%.1f / 100", sumContrib),
-        1, 0.82, 0, 1, 1, 1)
+
+    -- Renormalization caveat: show only when 2+ components are excluded.
+    if #excluded >= 2 then
+        tt:AddLine("|cff808080Excluded (no data): "
+            .. table.concat(excluded, ", ") .. "|r")
+        -- activeWeightSum = sum of configured weights for active components
+        local activeWeightSum = 0
+        for _, key in ipairs(order) do
+            if breakdown[key] then
+                activeWeightSum = activeWeightSum + (weights[key] or 0)
+            end
+        end
+        if totalConfigW > 0 and activeWeightSum < totalConfigW then
+            local pct = math.floor(activeWeightSum / totalConfigW * 100 + 0.5)
+            tt:AddLine(string.format(
+                "|cff808080Score over %d%% of configured weights.|r", pct))
+        end
+    elseif #excluded == 1 then
+        -- One excluded: mention it but no caveat line.
+        tt:AddLine("|cff666666Excluded (no data): "
+            .. table.concat(excluded, ", ") .. "|r")
+    end
+
+    -- Raid context footer
+    if sessionMedian or sessionMax then
+        tt:AddLine(" ")
+        local parts = {}
+        if sessionMedian then
+            table.insert(parts,
+                string.format("Median |cffffffff%d|r", math.floor(sessionMedian + 0.5)))
+        end
+        if sessionMax then
+            table.insert(parts,
+                string.format("Max |cffffffff%d|r", math.floor(sessionMax + 0.5)))
+        end
+        if s then
+            table.insert(parts,
+                string.format("This: |cffffffff%d|r", math.floor(s + 0.5)))
+        end
+        tt:AddLine("|cffaaaaaa" .. table.concat(parts, " | ") .. "|r")
+    end
 end
 
 local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, column,
@@ -241,13 +491,61 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
     local name     = rowData.name
     local session  = rcVoting.GetCurrentSession and rcVoting:GetCurrentSession()
                      or (rcVoting.session)  -- legacy fallback
+
     local itemID   = getItemIDForSession(rcVoting, session)
+
+    -- Evict stats cache when (session, itemID) changes.
+    if _sessionStats.session ~= session or _sessionStats.itemID ~= itemID then
+        _sessionStats = {}
+    end
+
     local names    = bidderNames(rcVoting, session, data)
     local simRef   = simReferenceFor(addon, itemID, names)
     local histRef  = historyReferenceFor(addon, names)
 
-    local score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
-    cellFrame.text:SetText(formatScore(score))
+    local score
+    if VF.ghostMode and VF._ghostWeights then
+        -- Ghost-weights path: temporarily substitute the alternate preset.
+        local profile = addon.db.profile
+        local savedW  = profile.weights
+        profile.weights = VF._ghostWeights
+        score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
+        profile.weights = savedW
+    else
+        score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
+    end
+    local inDs               = isInDataset(addon, name)
+    local median, max        = computeSessionStats(rcVoting, addon, session, data)
+
+    -- conflictThreshold: set in Settings > Tuning > "Display" section (2.10).
+    -- Default 5 points. Both candidates within threshold get the ~ prefix.
+    local threshold = (addon.db and addon.db.profile and addon.db.profile.conflictThreshold) or 5
+    local conflict  = score and isConflict(_sessionStats, score, threshold) or false
+
+    cellFrame.text:SetText(formatScore(score, inDs, median, max, conflict))
+
+    -- 4.11: High Contrast mode — fill cell background and render text white.
+    -- c is the computed color from ScoreColorRelative/ScoreColor (may be nil if no score).
+    local c = (score ~= nil and ns.Theme)
+              and ((ns.Theme.ScoreColorRelative
+                    and ns.Theme.ScoreColorRelative(score, median, max))
+                   or (ns.Theme.ScoreColor and ns.Theme.ScoreColor(score)))
+    if ns.Theme and ns.Theme.hcMode and c then
+        -- Fill the cell background with the score color.
+        if cellFrame.SetBackdropColor then
+            cellFrame:SetBackdropColor(c[1], c[2], c[3], 0.85)
+        end
+        -- Render text as white — must use a plain (non-escape) string so
+        -- the inline escape code from formatScore does not override the color.
+        if score ~= nil then
+            local prefix = conflict and "~" or ""
+            cellFrame.text:SetText(prefix .. tostring(math.floor(score + 0.5)))
+        end
+        cellFrame.text:SetTextColor(1, 1, 1, 1)
+    elseif cellFrame.SetBackdropColor then
+        -- Restore transparent background when not in HC mode.
+        cellFrame:SetBackdropColor(0, 0, 0, 0)
+    end
 
     -- If we're the leader (and transparency is on so it matters),
     -- broadcast authoritative scores for every candidate so raiders see
@@ -266,10 +564,93 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
 
     cellFrame:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        fillScoreTooltip(GameTooltip, addon, itemID, name, simRef, histRef)
+        local med, mx = computeSessionStats(rcVoting, addon, session, data)
+        fillScoreTooltip(GameTooltip, addon, itemID, name, simRef, histRef, med, mx)
+        GameTooltip:AddLine("|cff666666Shift-click to compare vs top candidate|r")
         GameTooltip:Show()
     end)
     cellFrame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    -- Right-click on score cell: open the pinnable explain panel (roadmap 2.9).
+    -- This handler is scoped to the score cell only; 2E's conflict indicator
+    -- modifies the text content via the SetText() call above and does not
+    -- touch this script slot.
+    cellFrame:SetScript("OnMouseDown", function(self, button)
+        if button == "LeftButton" and IsShiftKeyDown() then
+            if not (ns.ComparePopout and ns.ComparePopout.Open) then return end
+            if not itemID then return end
+
+            -- Find the top-ranked candidate by score in the current data set.
+            local topName, topScore
+            for _, row in ipairs(data or {}) do
+                if row.name then
+                    local s = computeScoreForRow(rcVoting, addon, session,
+                                                 row.name, simRef, histRef)
+                    if s and (not topScore or s > topScore) then
+                        topScore = s
+                        topName  = row.name
+                    end
+                end
+            end
+
+            -- If the clicked candidate IS the top candidate, compare against
+            -- the second-ranked instead (avoids a trivially identical popout).
+            local nameB = topName
+            if topName == name then
+                local secondName, secondScore
+                for _, row in ipairs(data or {}) do
+                    if row.name and row.name ~= name then
+                        local s = computeScoreForRow(rcVoting, addon, session,
+                                                     row.name, simRef, histRef)
+                        if s and (not secondScore or s > secondScore) then
+                            secondScore = s
+                            secondName  = row.name
+                        end
+                    end
+                end
+                nameB = secondName or topName
+            end
+
+            -- Single-candidate session guard.
+            if not nameB or nameB == name then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:AddLine("BobleLoot \226\128\148 Compare")
+                GameTooltip:AddLine(
+                    "Need at least two scored candidates to compare.", 1, 0.5, 0.5)
+                GameTooltip:Show()
+                C_Timer.After(2, function() GameTooltip:Hide() end)
+                return
+            end
+
+            -- Retrieve item link for the title bar.
+            local iLink
+            if rcVoting.GetLootTable then
+                local lt = rcVoting:GetLootTable()
+                if lt and lt[session] then iLink = lt[session].link end
+            end
+
+            local med, mx = computeSessionStats(rcVoting, addon, session, data)
+            ns.ComparePopout:Open(name, nameB, itemID, iLink, {
+                simReference     = simRef,
+                historyReference = histRef,
+                sessionMedian    = med,
+                sessionMax       = mx,
+            })
+        elseif button == "RightButton" then
+            GameTooltip:Hide()
+            if ns.ExplainPanel and ns.ExplainPanel.Open then
+                local med, mx = computeSessionStats(rcVoting, addon, session, data)
+                ns.ExplainPanel:Open(itemID, name, {
+                    simReference     = simRef,
+                    historyReference = histRef,
+                    sessionMedian    = med,
+                    sessionMax       = mx,
+                })
+            end
+        end
+    end)
+    -- EnableMouse so the OnMouseDown fires (lib-st cells may not have this by default).
+    cellFrame:EnableMouse(true)
 end
 
 local function sortFn(table, rowa, rowb, sortbycol)
@@ -282,11 +663,62 @@ local function sortFn(table, rowa, rowb, sortbycol)
     local names  = bidderNames(rcVoting, session, table.data)
     local simRef = simReferenceFor(addon, itemID, names)
     local histRef = historyReferenceFor(addon, names)
-    local sa = computeScoreForRow(rcVoting, addon, session, a.name, simRef, histRef) or -1
-    local sb = computeScoreForRow(rcVoting, addon, session, b.name, simRef, histRef) or -1
+    local function ghostScore(rowName)
+        if VF.ghostMode and VF._ghostWeights then
+            local savedW = addon.db.profile.weights
+            addon.db.profile.weights = VF._ghostWeights
+            local s = computeScoreForRow(rcVoting, addon, session,
+                                          rowName, simRef, histRef) or -1
+            addon.db.profile.weights = savedW
+            return s
+        end
+        return computeScoreForRow(rcVoting, addon, session,
+                                   rowName, simRef, histRef) or -1
+    end
+    local sa = ghostScore(a.name)
+    local sb = ghostScore(b.name)
     local col = table.cols[sortbycol]
     local direction = col.sort or col.defaultsort or "dsc"
     if direction == "asc" then return sa < sb else return sa > sb end
+end
+
+-- Writes BobleLoot scores into blank RC candidate Note fields for the
+-- given session. Called once per session on frame open. Skips candidates
+-- whose Note is already non-empty (human-typed notes must not be clobbered).
+local function writeNotesForSession(rcVoting, addon, session)
+    local resolver = VF.resolver
+    if not resolver or not resolver.writeCandidateNote then return end
+    local profile = addon.db and addon.db.profile
+    if not profile or not profile.writeRCNote then return end
+
+    local itemID = getItemIDForSession(rcVoting, session)
+    if not itemID then return end
+
+    -- Walk the scroll-table data to find all candidate rows.
+    local st = rcVoting.frame and rcVoting.frame.st
+    local tableData = st and st.data
+    if not tableData then return end
+
+    local names = {}
+    for _, row in ipairs(tableData) do
+        if row.name then names[#names + 1] = row.name end
+    end
+
+    -- Compute sim/history references once for the whole session.
+    local simRef  = simReferenceFor(addon, itemID, names)
+    local histRef = historyReferenceFor(addon, names)
+
+    for _, row in ipairs(tableData) do
+        if row.name then
+            local score = computeScoreForRow(rcVoting, addon, session,
+                                             row.name, simRef, histRef)
+            if score then
+                local text = string.format("BL=%d", math.floor(score + 0.5))
+                -- writeCandidateNote is a no-op if row.note is non-empty.
+                resolver.writeCandidateNote(row, text)
+            end
+        end
+    end
 end
 
 function VF:Hook(addon, RC)
@@ -296,6 +728,7 @@ function VF:Hook(addon, RC)
 
     self.addon    = addon
     self.rcVoting = rcVoting
+    self.resolver = ns.RCCompat and ns.RCCompat:GetResolver() or nil
 
     -- Avoid double-insert if user reloads.
     for _, col in ipairs(rcVoting.scrollCols) do
@@ -347,6 +780,200 @@ function VF:Hook(addon, RC)
     -- If the frame is already built, force a column refresh.
     if rcVoting.frame and rcVoting.frame.st and rcVoting.frame.st.SetDisplayCols then
         rcVoting.frame.st:SetDisplayCols(rcVoting.scrollCols)
+    end
+
+    -- Freshness badge on the Score column header.
+    -- We find the header row of the lib-st table and attach a FontString
+    -- to the cell that corresponds to our SCORE_COL column.
+    local function refreshFreshnessBadge()
+        local state = datasetFreshnessState()
+        local badge = VF._freshnessBadge
+        if not badge then return end
+
+        if not state then
+            badge:SetText("")
+            badge:SetScript("OnEnter", nil)
+            badge:SetScript("OnLeave", nil)
+            return
+        end
+
+        local t  = ns.Theme
+        local c  = (state == "danger") and (t and t.danger or {1, 0.31, 0.31, 1})
+                                        or  (t and t.warning or {1, 0.82, 0, 1})
+        badge:SetText(string.format("|cff%02x%02x%02x!|r",
+            math.floor(c[1]*255), math.floor(c[2]*255), math.floor(c[3]*255)))
+
+        badge:SetScript("OnEnter", function(self)
+            local d   = _G.BobleLoot_Data
+            local age = d and d.generatedAtTimestamp
+                        and formatAge(time() - d.generatedAtTimestamp)
+                        or  "unknown time"
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine("Boble Loot \xe2\x80\x94 dataset age")
+            GameTooltip:AddLine(string.format(
+                "Dataset generated %s ago.", age), 1, 1, 1)
+            GameTooltip:AddLine(
+                "Run tools/wowaudit.py to refresh.", 0.7, 0.7, 0.7)
+            GameTooltip:Show()
+        end)
+        badge:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
+    -- Attach badge FontString to the st header frame if accessible.
+    -- lib-st exposes the header row as st.header; each cell is st.header.cols[i].
+    local st = rcVoting.frame and rcVoting.frame.st
+    -- Hoisted out of the freshness-badge block so the ghost-weights
+    -- toggle block below can reuse the same column index.
+    local colIdx
+    if st and st.header then
+        for i, col in ipairs(rcVoting.scrollCols) do
+            if col.colName == SCORE_COL then colIdx = i; break end
+        end
+        if colIdx and st.header.cols and st.header.cols[colIdx] then
+            local headerCell = st.header.cols[colIdx]
+            local badge = headerCell:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            badge:SetPoint("TOPRIGHT", headerCell, "TOPRIGHT", 0, 0)
+            badge:SetText("")
+            VF._freshnessBadge = badge
+            refreshFreshnessBadge()
+        end
+    end
+
+    -- Store refreshFreshnessBadge so it can be called after data reloads.
+    VF.refreshFreshnessBadge = refreshFreshnessBadge
+
+    -- ── Ghost-weights toggle button (3.10) ───────────────────────────
+    -- Anchor: top-right of the score column header cell, left of the
+    -- freshness badge (which is already TOPRIGHT).
+    if colIdx and st and st.header and st.header.cols and st.header.cols[colIdx] then
+        local headerCell = st.header.cols[colIdx]
+        local T = ns.Theme
+
+        local ghostBtn = CreateFrame("Button", nil, headerCell)
+        ghostBtn:SetSize(34, 14)
+        -- Sit to the left of the freshness badge; badge is at TOPRIGHT.
+        ghostBtn:SetPoint("TOPRIGHT", headerCell, "TOPRIGHT", -8, -2)
+
+        local btnTex = ghostBtn:CreateTexture(nil, "BACKGROUND")
+        btnTex:SetAllPoints()
+        btnTex:SetColorTexture(0.12, 0.12, 0.16, 0.9)
+
+        local btnLabel = ghostBtn:CreateFontString(nil, "OVERLAY")
+        btnLabel:SetFont(T.fontBody, T.sizeSmall, "OUTLINE")
+        btnLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+        btnLabel:SetAllPoints()
+        btnLabel:SetJustifyH("CENTER")
+        btnLabel:SetText("Farm")
+        VF._ghostBtnLabel = btnLabel
+
+        -- Visual indicator on the header cell when ghost mode is active.
+        local ghostActiveLine = headerCell:CreateTexture(nil, "OVERLAY")
+        ghostActiveLine:SetPoint("BOTTOMLEFT",  headerCell, "BOTTOMLEFT",  0, 0)
+        ghostActiveLine:SetPoint("BOTTOMRIGHT", headerCell, "BOTTOMRIGHT", 0, 0)
+        ghostActiveLine:SetHeight(2)
+        ghostActiveLine:SetColorTexture(T.accent[1], T.accent[2], T.accent[3], 1)
+        ghostActiveLine:Hide()
+        VF._ghostActiveLine = ghostActiveLine
+
+        local function updateGhostButtonState()
+            if VF.ghostMode then
+                btnLabel:SetTextColor(T.accent[1], T.accent[2], T.accent[3])
+                btnLabel:SetText("Prog")  -- click to return to Prog weights
+                ghostActiveLine:Show()
+            else
+                btnLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+                btnLabel:SetText("Farm")  -- click to preview Farm weights
+                ghostActiveLine:Hide()
+            end
+        end
+        VF._updateGhostButtonState = updateGhostButtonState
+
+        ghostBtn:SetScript("OnClick", function()
+            VF.SetGhostMode(not VF.ghostMode)
+            updateGhostButtonState()
+        end)
+
+        ghostBtn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+            GameTooltip:AddLine("BobleLoot \226\128\148 Ghost Weights")
+            if VF.ghostMode then
+                GameTooltip:AddLine(
+                    "Previewing Farm weights. Click to return to Prog weights.",
+                    1, 1, 1)
+            else
+                local addonRef = VF.addon
+                local preset = "farm"
+                if addonRef and addonRef.db then
+                    preset = addonRef.db.profile.ghostPresets.activeGhostPreset
+                             or "farm"
+                end
+                GameTooltip:AddLine(string.format(
+                    "Preview how current candidates rank under %s weights " ..
+                    "(your Prog weights are unchanged).", preset:gsub("^%l", string.upper)),
+                    1, 1, 1)
+            end
+            GameTooltip:AddLine("|cff666666No network traffic. Display only.|r")
+            GameTooltip:Show()
+        end)
+        ghostBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        VF._ghostBtn = ghostBtn
+    end
+
+    -- Ghost mode clears on session end.
+    if rcVoting.frame then
+        rcVoting.frame:HookScript("OnHide", function()
+            if VF.ghostMode then
+                VF.SetGhostMode(false)
+                if VF._updateGhostButtonState then
+                    VF._updateGhostButtonState()
+                end
+            end
+        end)
+    end
+
+    -- Hook the frame-open method to write Notes once per session.
+    -- RC v3.x uses "Open"; v2.x may use "StartSession". Try both.
+    -- If neither exists, fall back to UpdateScrollTable (write lands on
+    -- the second render pass due to the C_Timer.After(0) defer).
+    local function onSessionOpen(_, session)
+        session = session or (rcVoting.GetCurrentSession and rcVoting:GetCurrentSession())
+                             or rcVoting.session
+        if not session then return end
+        if _noteWrittenForSession[session] then return end
+        _noteWrittenForSession[session] = true
+        -- Defer by one frame so RC has populated the scroll table first.
+        C_Timer.After(0, function()
+            writeNotesForSession(rcVoting, addon, session)
+        end)
+    end
+
+    for _, methodName in ipairs({ "Open", "StartSession", "UpdateScrollTable" }) do
+        if type(rcVoting[methodName]) == "function" then
+            hooksecurefunc(rcVoting, methodName, onSessionOpen)
+            break  -- hook only the first one found
+        end
+    end
+
+    -- Reset per-session tracking when the voting frame closes.
+    if type(rcVoting.CloseFrame) == "function" then
+        hooksecurefunc(rcVoting, "CloseFrame", function()
+            _noteWrittenForSession = {}
+        end)
+    end
+
+    -- 4.11: re-render all visible score cells when the color mode changes.
+    if ns.Theme and ns.Theme.RegisterColorModeConsumer then
+        ns.Theme:RegisterColorModeConsumer(function()
+            -- Invalidate _sessionStats cache so doCellUpdate recomputes colors on next render.
+            _sessionStats = {}
+            -- For immediate visual update if the voting frame is currently visible:
+            if rcVoting and rcVoting.frame and rcVoting.frame:IsShown() then
+                if rcVoting.scrollTable and rcVoting.scrollTable.Refresh then
+                    pcall(function() rcVoting.scrollTable:Refresh() end)
+                end
+            end
+        end)
     end
 
     self.hooked = true

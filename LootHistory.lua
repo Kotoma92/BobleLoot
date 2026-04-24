@@ -32,11 +32,17 @@ local LH = {}
 ns.LootHistory = LH
 
 local DEFAULT_DAYS    = 28
-local DEFAULT_WEIGHTS = { bis = 1.5, major = 1.0, mainspec = 1.0, minor = 0.5 }
+local DEFAULT_WEIGHTS = { bis = 1.5, major = 1.0, mainspec = 1.0, minor = 0.5, vault = 0.5 }
 local DEFAULT_MIN_ILVL = 0
 
 -- Try every plausible field RC has used to record an awarded item's
 -- ilvl. Falls back to parsing the link via GetDetailedItemLevelInfo.
+-- NOTE (Batch 4C): The resolver equivalent for this function is
+-- ns.RCCompat:GetResolver().lootEntryIlvl. LootHistory.lua retains its
+-- own inline fallback chain because it runs before VotingFrame/LootFrame
+-- hooks are established and operates on the SavedVariables DB rather than
+-- live session data. If RC changes its ilvl field name in a future major
+-- version, update both here and in RESOLVER_MATRIX (RCCompat.lua).
 local function entryItemLevel(entry)
     local v = entry.ilvl or entry.itemLevel or entry.iLvl or entry.lvl
     if type(v) == "number" and v > 0 then return v end
@@ -73,6 +79,10 @@ local CATEGORY_PATTERNS = {
     { key = "minor",    patterns = { "minor", "small upgrade" } },
     { key = "mainspec", patterns = { "mainspec", "main%-spec", "main spec",
                                      "need", "upgrade" } },
+    -- BOE distributions are tracked as "vault" category (same weight,
+    -- configurable). Tested after the normal upgrade categories so a
+    -- response of "Major upgrade (BOE)" still reads as "major".
+    { key = "vault",    patterns = { "boe", "bind on equip", "bind%-on%-equip" } },
 }
 
 -- Numeric response IDs only used as a fallback when the entry has no
@@ -187,6 +197,8 @@ end
 
 -- RC entries store time as either a Unix timestamp (number) or a "date"
 -- string like "12/04/26" / "2026-04-12 19:30:00". Try a few shapes.
+-- NOTE (Batch 4C): Resolver equivalent: ns.RCCompat:GetResolver().lootEntryTimestamp.
+-- Kept in sync with RCCompat.lua RESOLVER_MATRIX manually.
 local function entryTime(entry)
     local t = entry.time or entry.timestamp
     if type(t) == "number" then return t end
@@ -211,12 +223,233 @@ local function effectiveWeights(profile)
         major    = w.major    or DEFAULT_WEIGHTS.major,
         mainspec = w.mainspec or DEFAULT_WEIGHTS.mainspec,
         minor    = w.minor    or DEFAULT_WEIGHTS.minor,
+        vault    = (profile.vaultWeight ~= nil) and profile.vaultWeight
+                   or DEFAULT_WEIGHTS.vault,
     }
 end
 
--- Process one entry; bumps row.counts/row.total in place. Pulled out so
--- both the sync and async paths share the exact same logic.
-local function processEntry(e, row, cutoff, weights, minIlvl)
+-- Record a Great Vault selection as a synthetic loot history entry.
+-- Called from Core.lua's WEEKLY_REWARDS_ITEM_GRABBED handler.
+function LH:RecordVaultSelection(addon, playerName, itemLink, ilvl)
+    local profile = addon.db.profile
+    profile.vaultEntries = profile.vaultEntries or {}
+    local entry = {
+        player   = playerName,
+        link     = itemLink,
+        ilvl     = ilvl,
+        response = "vault",
+        time     = time(),
+    }
+    table.insert(profile.vaultEntries, entry)
+    -- Kick off a debounced re-apply so the score updates promptly.
+    if ns.SettingsPanel and ns.SettingsPanel.ScheduleLootHistoryApply then
+        ns.SettingsPanel.ScheduleLootHistoryApply()
+    end
+end
+
+-- ── RC schema-drift detection ─────────────────────────────────────────
+--
+-- Observed RC SavedVar shapes (all read-only; we never write to RC's SV):
+--
+--   Shape A (RC <= 2.x, current as of 2026-04):
+--     RCLootCouncilLootDB = {
+--       factionrealm = {
+--         ["Horde - Draenor"] = {
+--           ["Player-Realm"] = {
+--             [1] = { date, time, lootWon, response, responseID, id, ... }
+--           }
+--         }
+--       }
+--     }
+--
+--   Shape B (hypothetical RC 3.x, per-spec or per-character flattening):
+--     RCLootCouncilLootDB = {
+--       ["Player-Realm"] = { ... }   -- factionrealm key gone
+--     }
+--
+--   Shape C (hypothetical encrypted/opaque storage):
+--     RCLootCouncilLootDB = { payload = "<base64>", version = 3 }
+--
+-- EXPECTED_ENTRY_FIELDS lists field-name groups. For each group, at least
+-- one name must be present on a sample entry; if none are, that group is
+-- flagged as missing.
+
+local EXPECTED_ENTRY_FIELDS = {
+    { group = "id",       names = { "id", "itemID" } },
+    { group = "item",     names = { "lootWon", "link", "itemLink" } },
+    { group = "response", names = { "response", "responseID" } },
+    { group = "time",     names = { "time", "timestamp", "date" } },
+    { group = "ilvl",     names = { "ilvl", "itemLevel", "iLvl", "lvl" } },
+}
+
+-- Inspect `_G.RCLootCouncilLootDB` (or a passed-in substitute for
+-- offline testing) and return a shape-verdict table matching the
+-- cross-plan contract above. Also writes to BobleLootDB.profile if
+-- `addon` is provided.
+--
+-- `db`    -- the raw RCLootCouncilLootDB table (or nil to use the live global)
+-- `addon` -- the BobleLoot addon object (may be nil for unit testing)
+-- Returns: verdict table (same shape as rcSchemaDetected)
+function LH:DetectSchemaVersion(db, addon)
+    db = db or _G.RCLootCouncilLootDB
+
+    local verdict = {
+        status        = "unknown",
+        version       = 0,
+        checkedAt     = time(),
+        missingFields = {},
+        rcVersion     = "?",
+        sourceUsed    = "?",
+    }
+
+    -- Preserve existing counter across calls.
+    local profile = addon and addon.db and addon.db.profile
+    local prev = profile and profile.rcSchemaDetected
+    verdict.version = (prev and type(prev.version) == "number")
+                       and (prev.version + 1) or 1
+
+    -- RC version string (purely informational).
+    local ok, rc = pcall(function()
+        return LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
+    end)
+    if ok and rc and rc.version then
+        verdict.rcVersion = tostring(rc.version)
+    end
+
+    -- ── Layer 1: top-level factionrealm key ───────────────────────────
+    if type(db) ~= "table" then
+        -- SavedVar entirely missing or wrong type.
+        verdict.status = "unknown"
+        verdict.missingFields = { "RCLootCouncilLootDB (top-level missing)" }
+        LH.lastVerdictForDiag = verdict
+        if profile then profile.rcSchemaDetected = verdict end
+        return verdict
+    end
+
+    local fr = db.factionrealm
+    if type(fr) ~= "table" then
+        verdict.status = "unknown"
+        verdict.missingFields = { "RCLootCouncilLootDB.factionrealm" }
+        LH.lastVerdictForDiag = verdict
+        if profile then profile.rcSchemaDetected = verdict end
+        return verdict
+    end
+
+    -- ── Layer 2: factionrealm is table-of-tables ──────────────────────
+    -- At least one factionrealm key must be a table of character entries.
+    local frKey, frVal
+    for k, v in pairs(fr) do
+        if type(k) == "string" and type(v) == "table" then
+            frKey, frVal = k, v
+            break
+        end
+    end
+    if not frKey then
+        verdict.status = "unknown"
+        verdict.missingFields = { "factionrealm sub-tables (no string->table entries)" }
+        LH.lastVerdictForDiag = verdict
+        if profile then profile.rcSchemaDetected = verdict end
+        return verdict
+    end
+
+    -- Confirm at least one character key maps to an array of tables.
+    local charKey, charEntries
+    for k, v in pairs(frVal) do
+        if type(k) == "string" and type(v) == "table" and #v > 0
+           and type(v[1]) == "table" then
+            charKey, charEntries = k, v
+            break
+        end
+    end
+    if not charKey then
+        -- factionrealm structure exists but contains no recognisable
+        -- character arrays — could be an empty raid night or degraded.
+        -- Treat as "degraded" rather than "unknown" because factionrealm
+        -- is present; further entry-field checks are skipped (nothing to sample).
+        verdict.status    = "degraded"
+        verdict.sourceUsed = "RCLootCouncilLootDB.factionrealm{" .. frKey .. "}"
+        verdict.missingFields = { "no character entry arrays found (empty history?)" }
+        LH.lastVerdictForDiag = verdict
+        if profile then profile.rcSchemaDetected = verdict end
+        return verdict
+    end
+
+    verdict.sourceUsed = "RCLootCouncilLootDB.factionrealm{" .. frKey .. "}[" .. charKey .. "]"
+
+    -- ── Layer 3: per-entry field groups ───────────────────────────────
+    -- Sample up to the first 3 entries to reduce false positives on
+    -- partially-populated early entries.
+    local sampleSize = math.min(3, #charEntries)
+    local missingGroups = {}
+
+    for _, fieldGroup in ipairs(EXPECTED_ENTRY_FIELDS) do
+        local found = false
+        for i = 1, sampleSize do
+            local entry = charEntries[i]
+            if type(entry) == "table" then
+                for _, fieldName in ipairs(fieldGroup.names) do
+                    if entry[fieldName] ~= nil then
+                        found = true
+                        break
+                    end
+                end
+            end
+            if found then break end
+        end
+        if not found then
+            missingGroups[#missingGroups + 1] = fieldGroup.group
+                .. " (tried: " .. table.concat(fieldGroup.names, "/") .. ")"
+        end
+    end
+
+    verdict.missingFields = missingGroups
+
+    -- "ilvl" is the only field group we already have fallback resolvers
+    -- for that we tolerate silently; everything else is a real concern.
+    -- "degraded" = ilvl missing (we can limp along) OR any one other
+    -- group missing. "unknown" reserved for missing factionrealm only
+    -- (handled above). Here all remaining cases are ok or degraded.
+    if #missingGroups == 0 then
+        verdict.status = "ok"
+    else
+        verdict.status = "degraded"
+    end
+
+    LH.lastVerdictForDiag = verdict
+    if profile then profile.rcSchemaDetected = verdict end
+    return verdict
+end
+
+-- Shared helper: merge synthHistory entries into a result table.
+-- Called by both CountItemsReceived (sync) and LH:Apply (via the same sync path).
+-- NOTE: ilvl filtering is skipped for synthetic entries because querying item
+-- level without an async API call is not reliable. Time-window still applies.
+local function mergeSynthEntries(result, synthEntries, cutoff)
+    if type(synthEntries) ~= "table" then return end
+    for _, e in ipairs(synthEntries) do
+        if type(e) == "table" and type(e.name) == "string" then
+            local t = e.t
+            local timeOk = (not cutoff) or (not t) or t >= cutoff
+            if timeOk then
+                local row = result[e.name]
+                if not row then
+                    row = { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0, vault = 0 } }
+                    result[e.name] = row
+                end
+                -- Synthetic entries carry their own pre-computed weight.
+                row.total = row.total + (e.weight or 0.75)
+                local cat = e.synthType or "mainspec"
+                row.counts[cat] = (row.counts[cat] or 0) + 1
+            end
+        end
+    end
+end
+
+-- Process one entry; bumps row.counts/row.total in place. Shared by sync
+-- and async count paths. `profile` (nil-safe) enables wasted-loot filtering;
+-- `name` identifies the row owner for IsWasted lookups; `LH` is the module
+-- self-reference so wasted-loot state can be resolved without binding self.
+local function processEntry(e, row, cutoff, weights, minIlvl, profile, name, LH)
     if type(e) ~= "table" then return end
     local cat = classify(e)
     if not cat then return end
@@ -224,63 +457,120 @@ local function processEntry(e, row, cutoff, weights, minIlvl)
     local timeOk = (not cutoff) or (not t) or t >= cutoff
     local ilvl = entryItemLevel(e)
     local ilvlOk = (minIlvl <= 0) or (ilvl == nil) or (ilvl >= minIlvl)
-    if timeOk and ilvlOk then
+    local wastedOk = true
+    if profile and LH and LH.IsWasted then
+        local link = e.lootWon or e.link or e.itemLink
+        local iid = link and C_Item and C_Item.GetItemInfoInstant and
+            select(2, C_Item.GetItemInfoInstant(link))
+        if iid and LH:IsWasted(name, iid, profile) then
+            wastedOk = false
+        end
+    end
+    if timeOk and ilvlOk and wastedOk then
         row.counts[cat] = (row.counts[cat] or 0) + 1
         row.total = row.total + (weights[cat] or 0)
     end
 end
 
 local function newRow()
-    return { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0 } }
+    return { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0, vault = 0 } }
 end
 
--- Synchronous version. Kept for /bl debugchar and small DBs. Will hit
--- "script ran too long" on >5k entries, so the live path uses the
--- async chunked variant below.
-function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl)
+-- Build a merged {name -> {entries...}} table combining the live RC DB
+-- with any player-keyed extra entries (e.g. vault selections).
+local function mergeInputs(rcLootDB, extraEntries)
+    local merged = {}
+    if type(rcLootDB) == "table" then
+        for name, entries in pairs(rcLootDB) do
+            if type(entries) == "table" then
+                merged[name] = {}
+                for _, e in ipairs(entries) do
+                    merged[name][#merged[name] + 1] = e
+                end
+            end
+        end
+    end
+    if type(extraEntries) == "table" then
+        for _, e in ipairs(extraEntries) do
+            local name = e.player
+            if type(name) == "string" and name ~= "" then
+                merged[name] = merged[name] or {}
+                merged[name][#merged[name] + 1] = e
+            end
+        end
+    end
+    return merged
+end
+
+-- Synchronous: build name -> { total, counts }. Kept for /bl debugchar,
+-- HistoryViewer, and other small-batch callers. On very large RC DBs the
+-- live /bl lootdb path uses the async variant below to avoid tripping
+-- Blizzard's "script ran too long" watchdog.
+-- profile (6th param) enables wasted-loot filtering (3.5). When nil,
+-- wasted-loot checks are skipped.
+-- synthEntries (7th param) is optional: catalyst / tier-token entries
+-- merged via mergeSynthEntries (roadmap 4.2).
+function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, profile, synthEntries)
     local cutoff = (days and days > 0) and (time() - days * 24 * 3600) or nil
     minIlvl = minIlvl or 0
+    local merged = mergeInputs(rcLootDB, extraEntries)
     local result = {}
-    if type(rcLootDB) ~= "table" then return result end
-    for name, entries in pairs(rcLootDB) do
+    for name, entries in pairs(merged) do
         if type(entries) == "table" then
             local row = newRow()
             for _, e in ipairs(entries) do
-                processEntry(e, row, cutoff, weights, minIlvl)
+                processEntry(e, row, cutoff, weights, minIlvl, profile, name, self)
             end
             result[name] = row
         end
     end
+    mergeSynthEntries(result, synthEntries, cutoff)
     return result
 end
 
--- Spread the work across frames. Yields every CHUNK entries via
+-- item 4.5: resolve a data-file character name to the RC loot-history key.
+-- data.renames maps old RC name -> new data name (emitted by wowaudit.py
+-- from tools/renames.json). To look up a data-file char in RC rows we need
+-- the reverse: given new name, find old name that RC still uses.
+local function resolveRCName(newName, data)
+    if data and data.renames then
+        for oldName, mappedName in pairs(data.renames) do
+            if mappedName == newName then
+                return oldName
+            end
+        end
+    end
+    return newName
+end
+
+-- Async chunked counter (v1.0.3). Yields every CHUNK entries via
 -- C_Timer.After(0, ...) so we never trip Blizzard's "script ran too
--- long" watchdog. Calls onDone(rows) when finished.
+-- long" watchdog on multi-thousand-entry RC histories. Calls onDone(rows)
+-- when finished. Accepts the same extended semantics as the sync variant.
 local CHUNK = 400
-function LH:CountItemsReceivedAsync(rcLootDB, days, weights, minIlvl, onDone)
+function LH:CountItemsReceivedAsync(rcLootDB, days, weights, minIlvl,
+                                    extraEntries, profile, synthEntries, onDone)
     local cutoff = (days and days > 0) and (time() - days * 24 * 3600) or nil
     minIlvl = minIlvl or 0
+    local merged = mergeInputs(rcLootDB, extraEntries)
     local result = {}
-    if type(rcLootDB) ~= "table" then onDone(result); return end
-    -- Snapshot character names so changes to the underlying RC table
-    -- mid-walk (a fresh CHAT_MSG_LOOT inserting an entry) don't break us.
     local names = {}
-    for name, entries in pairs(rcLootDB) do
+    for name, entries in pairs(merged) do
         if type(entries) == "table" then names[#names + 1] = name end
     end
+    local LH = self
     local ni = 1
     local function step()
         local processed = 0
         while ni <= #names do
             local name = names[ni]
-            local entries = rcLootDB[name]
+            local entries = merged[name]
             local row = result[name] or newRow()
             result[name] = row
             local i = (row._cursor or 0) + 1
             local n = #entries
             while i <= n do
-                processEntry(entries[i], row, cutoff, weights, minIlvl)
+                processEntry(entries[i], row, cutoff, weights, minIlvl, profile, name, LH)
                 processed = processed + 1
                 i = i + 1
                 if processed >= CHUNK then
@@ -291,8 +581,8 @@ function LH:CountItemsReceivedAsync(rcLootDB, days, weights, minIlvl, onDone)
             row._cursor = nil
             ni = ni + 1
         end
-        -- Strip cursor scratch fields before handing the result off.
         for _, r in pairs(result) do r._cursor = nil end
+        mergeSynthEntries(result, synthEntries, cutoff)
         onDone(result)
     end
     step()
@@ -300,9 +590,14 @@ end
 
 -- Walk our loaded data file and overwrite itemsReceived using the live
 -- counts. Names in the data file are "Name-Realm"; RC keys them the same
--- way ("Sprinty-Doomhammer"), so they line up directly.
+-- way ("Sprinty-Doomhammer"), so they line up directly (modulo renames).
 function LH:Apply(addon)
     if self._applying then return end
+    -- Refresh schema detection on every Apply so the stored verdict
+    -- reflects the current RC SavedVar state. The first-session warning
+    -- itself is throttled in Setup.
+    self:DetectSchemaVersion(nil, addon)
+
     local data = addon:GetData()
     if not data or not data.characters then return end
     local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
@@ -314,27 +609,43 @@ function LH:Apply(addon)
     local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
     local weights = effectiveWeights(profile)
     self._applying = true
-    self:CountItemsReceivedAsync(db, days, weights, minIlvl, function(rows)
-        self._applying = false
-        if not data or not data.characters then return end
-        local matched, scanned = 0, 0
-        for _ in pairs(rows) do scanned = scanned + 1 end
-        for name, char in pairs(data.characters) do
-            local r = rows[name]
-            if r then
-                char.itemsReceived          = r.total
-                char.itemsReceivedBreakdown = r.counts
-                matched = matched + 1
+    self:CountItemsReceivedAsync(db, days, weights, minIlvl,
+        profile.vaultEntries or {}, profile, profile.synthHistory or {},
+        function(rows)
+            self._applying = false
+            if not data or not data.characters then return end
+            local matched, scanned = 0, 0
+            for _ in pairs(rows) do scanned = scanned + 1 end
+            for name, char in pairs(data.characters) do
+                -- item 4.5: apply renames before lookup so realm-transferred
+                -- characters match by old RC key when data.renames is present.
+                local rcName = resolveRCName(name, data)
+                local r = rows[rcName]
+                if r then
+                    char.itemsReceived          = r.total
+                    char.itemsReceivedBreakdown = r.counts
+                    matched = matched + 1
+                end
             end
-        end
-        self.lastApply   = time()
-        self.lastMatched = matched
-        self.lastScanned = scanned
-    end)
+            self.lastApply   = time()
+            self.lastMatched = matched
+            self.lastScanned = scanned
+        end)
 end
 
 -- Diagnostic helper used by /bl lootdb.
 function LH:Diagnose(addon)
+    -- Synthetic history summary (4.2).
+    local synth = addon.db.profile.synthHistory or {}
+    addon:Print(string.format("Synthetic history entries: %d", #synth))
+    for i, e in ipairs(synth) do
+        if i > 10 then addon:Print("  (truncated at 10)"); break end
+        addon:Print(string.format("  [%d] %s | %s | w=%.2f | %s",
+            i, e.name or "?", e.synthType or "?",
+            e.weight or 0,
+            date("%Y-%m-%d", e.t or 0)))
+    end
+
     local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
     local db, source = getRCLootDB(RC)
     addon:Print("Loot history source: " .. (source or "?"))
@@ -525,10 +836,62 @@ function LH:DedupRCSavedVar()
     return removed
 end
 
+-- ── Wasted-loot API (3.5) ────────────────────────────────────────────────
+
+-- Deterministic fingerprint for a (recipient, itemID) pair.
+-- Deliberately excludes timestamp so the key is stable across Apply calls.
+function LH:MakeFingerprint(name, itemID)
+    return tostring(name) .. ":" .. tostring(itemID)
+end
+
+-- Record a fresh RC award in Core's pending-awards table so TRADE_CLOSED
+-- can match against it within the 5-minute window.
+function LH:RegisterPendingAward(addonObj, name, itemID)
+    if not addonObj or not addonObj._pendingAwards then return end
+    local fp = self:MakeFingerprint(name, itemID)
+    addonObj._pendingAwards[fp] = { name = name, itemID = itemID, ts = time() }
+end
+
+-- Flag a (name, itemID) pair as wasted in the persistent profile map.
+-- Safe to call multiple times for the same pair (idempotent).
+function LH:MarkWasted(name, itemID, profile)
+    if not profile or not profile.wastedLootMap then return end
+    local fp = self:MakeFingerprint(name, itemID)
+    profile.wastedLootMap[fp] = true
+end
+
+function LH:IsWasted(name, itemID, profile)
+    if not profile or not profile.wastedLootMap then return false end
+    local fp = self:MakeFingerprint(name, itemID)
+    return profile.wastedLootMap[fp] == true
+end
+
+-- Set to true after the first-session drift warning has been emitted.
+-- Reset to false by Setup() on each addon load.
+LH._driftWarnedThisSession = false
+
 function LH:Setup(addon)
+    self._driftWarnedThisSession = false
     self.addon = addon
     -- Apply once after a short delay so RC has fully loaded its DB.
     C_Timer.After(5, function() self:Apply(addon) end)
+
+    -- Initial schema detection. Runs after the C_Timer.After(5) fires so
+    -- RC's SavedVariables are fully loaded. We schedule it at +6 seconds
+    -- (one second after Apply) so the first Apply result is already written
+    -- and DetectSchemaVersion can read a populated db.
+    C_Timer.After(6, function()
+        local verdict = self:DetectSchemaVersion(nil, addon)
+        -- First-session chat warning (throttled to one per session load).
+        if verdict.status ~= "ok" and not self._driftWarnedThisSession then
+            self._driftWarnedThisSession = true
+            addon:Print(string.format(
+                "|cffFFA600[BobleLoot] RCLootCouncil schema mismatch detected "
+                .. "(status: %s). Loot history may be incomplete. "
+                .. "Run |cffffffff/bl lootdb|r|cffFFA600 for details.|r",
+                verdict.status))
+        end
+    end)
     -- And re-apply whenever RC announces a new awarded item.
     local f = CreateFrame("Frame")
     f:RegisterEvent("CHAT_MSG_LOOT")
@@ -546,6 +909,158 @@ function LH:Setup(addon)
             return
         end
         if self.lastApply and (time() - self.lastApply) < 10 then return end
+
+        -- Register the most recent RC award as a pending wasted-loot candidate.
+        -- RC does not fire a dedicated addon event here, so we read the active
+        -- session's last award from the RC addon object if available.
+        local RC = LibStub and LibStub("AceAddon-3.0"):GetAddon("RCLootCouncil", true)
+        if RC then
+            local session = RC.GetCurrentSession and RC:GetCurrentSession()
+            if session then
+                for _, candidate in pairs(session) do
+                    if candidate.awarded and candidate.name and candidate.link then
+                        local iid = C_Item and C_Item.GetItemInfoInstant and
+                            select(2, C_Item.GetItemInfoInstant(candidate.link))
+                        if iid then
+                            self:RegisterPendingAward(addon, candidate.name, iid)
+                        end
+                    end
+                end
+            end
+        end
+
         C_Timer.After(2, function() self:Apply(addon) end)
+    end)
+end
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- CatalystTracker: synthetic history for catalyst conversions and tier tokens
+-- Roadmap item 4.2.
+--
+-- Detection heuristics (see plan 2026-04-23-batch-4b for full rationale):
+--   Catalyst: NEW_ITEM_ADDED fires while C_ItemInteraction.IsReady() is true.
+--   Tier token: NEW_ITEM_ADDED fires while _vendorOpen is true AND the item
+--               belongs to a gear set (C_Item.GetItemSetInfo returns non-nil).
+--
+-- TODO verify in-game: NEW_ITEM_ADDED fires for catalyst delivery.
+-- TODO verify in-game: C_ItemInteraction.IsReady() name and availability.
+-- TODO verify in-game: C_Item.GetItemSetInfo availability and return shape.
+-- ─────────────────────────────────────────────────────────────────────────
+
+local CatalystTracker = {}
+ns.CatalystTracker = CatalystTracker
+
+-- Session state (not persisted).
+CatalystTracker._vendorOpen       = false
+CatalystTracker._lastCatalystItem = nil  -- dedup: itemID of last catalyst entry recorded
+
+local function isCatalystOpen()
+    -- C_ItemInteraction.IsReady() returns true when the Catalyst frame is active.
+    -- API existence guard: C_ItemInteraction may not exist on older clients.
+    if C_ItemInteraction and C_ItemInteraction.IsReady then
+        return C_ItemInteraction.IsReady() == true
+    end
+    return false
+end
+
+local function getItemSetID(link)
+    -- C_Item.GetItemSetInfo(itemID) returns a table or nil.
+    -- We only need to know if the item belongs to a set.
+    if not C_Item or not C_Item.GetItemSetInfo then return nil end
+    local itemID = link and tonumber(link:match("item:(%d+)"))
+    if not itemID then return nil end
+    local ok, info = pcall(C_Item.GetItemSetInfo, itemID)
+    return (ok and type(info) == "table") and info or nil
+end
+
+-- Write a synthetic entry to BobleLootDB.profile.synthHistory.
+-- synthType: "catalyst" or "tiertoken"
+-- Deduplication: skip if an entry for the same (name, itemID) was recorded
+-- within the last 10 seconds (catches rapid bag-update bursts).
+function CatalystTracker:RecordEntry(addonObj, name, itemLink, itemID, synthType)
+    local profile = addonObj.db.profile
+    profile.synthHistory = profile.synthHistory or {}
+
+    local now = time()
+    -- Dedup: scan recent entries.
+    for i = #profile.synthHistory, math.max(1, #profile.synthHistory - 5), -1 do
+        local e = profile.synthHistory[i]
+        if e and e.name == name and e.itemID == itemID and (now - (e.t or 0)) < 10 then
+            return  -- duplicate within 10s window; discard
+        end
+    end
+
+    local weight = (profile.synthWeight ~= nil) and profile.synthWeight or 0.75
+    table.insert(profile.synthHistory, {
+        name      = name,
+        itemID    = itemID,
+        itemLink  = itemLink or "",
+        t         = now,
+        synthType = synthType,
+        weight    = weight,
+    })
+
+    -- Trigger a history re-apply so scores update immediately.
+    C_Timer.After(1, function()
+        if ns.LootHistory and ns.LootHistory.Apply then
+            ns.LootHistory:Apply(addonObj)
+        end
+    end)
+
+    if addonObj and addonObj.Print then
+        addonObj:Print(string.format(
+            "Synthetic loot recorded: %s received %s via %s (weight=%.2f)",
+            name, tostring(itemLink or itemID), synthType, weight))
+    end
+end
+
+function CatalystTracker:Setup(addonObj)
+    self.addon = addonObj
+    local playerName = UnitName("player") .. "-" .. (GetRealmName and GetRealmName():gsub("%s+", "") or "")
+
+    local f = CreateFrame("Frame")
+    -- Tier-token gate: track vendor open/close state.
+    f:RegisterEvent("MERCHANT_SHOW")
+    f:RegisterEvent("MERCHANT_CLOSED")
+    -- Primary item-acquisition signal.
+    -- NEW_ITEM_ADDED fires (bagID, slotID) when a new item arrives in bags.
+    -- TODO verify in-game: confirm this event fires for catalyst deliveries.
+    f:RegisterEvent("NEW_ITEM_ADDED")
+
+    f:SetScript("OnEvent", function(_, event, arg1, arg2)
+        if event == "MERCHANT_SHOW" then
+            CatalystTracker._vendorOpen = true
+            return
+        end
+        if event == "MERCHANT_CLOSED" then
+            CatalystTracker._vendorOpen = false
+            return
+        end
+        if event == "NEW_ITEM_ADDED" then
+            local bagID, slotID = arg1, arg2
+            -- Determine detection path.
+            local synthType = nil
+            if isCatalystOpen() then
+                synthType = "catalyst"
+            elseif CatalystTracker._vendorOpen then
+                -- Only record vendor-acquired items that are tier set pieces.
+                local link = C_Container and C_Container.GetContainerItemLink(bagID, slotID)
+                             or GetContainerItemLink(bagID, slotID)
+                if link and getItemSetID(link) then
+                    synthType = "tiertoken"
+                end
+            end
+
+            if not synthType then return end
+
+            -- Get item info.
+            local link = C_Container and C_Container.GetContainerItemLink(bagID, slotID)
+                         or GetContainerItemLink(bagID, slotID)
+            if not link then return end
+            local itemID = tonumber(link:match("item:(%d+)"))
+            if not itemID then return end
+
+            CatalystTracker:RecordEntry(addonObj, playerName, link, itemID, synthType)
+        end
     end)
 end

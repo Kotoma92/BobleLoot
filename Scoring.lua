@@ -4,6 +4,28 @@
 
      A component is dropped (and its weight redistributed) when the
      underlying data is missing for that candidate.
+
+     NIL-VS-ZERO INVARIANT (Batch 1B, 2026-04-22)
+     -----------------------------------------------
+     simComponent returns nil ONLY when the item was never simmed for
+     this character (i.e. char.simsKnown[itemID] is falsy AND
+     char.sims[itemID] is nil).  A genuinely-zero sim result returns
+     0.0, not nil.
+
+     The data file encodes this via two parallel structures:
+       char.sims[itemID]      -- numeric upgrade %, may be absent if 0
+       char.simsKnown[itemID] -- true iff wowaudit.py fetched a result
+                              --   for this item (even a 0% result)
+
+     Scoring:Compute hard-returns nil for a candidate when sim weight
+     is active and simComponent returns nil. This means: "we have no
+     idea whether this item is an upgrade, so it would be misleading
+     to rank this candidate against others who have been simmed."
+     It does NOT mean "sim is zero" — that case must score, just low.
+
+     Do not collapse simsKnown into sims using a sentinel (e.g. -1).
+     The sims table is a plain number map; sentinels require every
+     consumer to know about them. Keep the tables separate.
 ]]
 
 local _, ns = ...
@@ -20,17 +42,24 @@ end
 
 local function simComponent(char, itemID, simReference)
     if not char.sims then return nil end
-    local pct = char.sims[itemID]
-    if pct == nil then return nil end
-    -- Per-item comparative normalization: if a reference max (= the
-    -- highest sim percentage for this item among the current bidders)
-    -- is provided, scale value to [0..1] against that. The bidder with
-    -- the biggest upgrade gets 1.0, others scaled proportionally.
+    -- simsKnown is a set of itemIDs for which a sim result exists in the
+    -- dataset, even if that result is zero. Without it, an omitted key
+    -- (wowaudit.py didn't write zero-value entries) is indistinguishable
+    -- from "item was never simmed for this character."
+    --
+    -- Invariant: if simsKnown[itemID] is true, the sim result is known and
+    -- authoritative; char.sims[itemID] may be nil (treat as 0.0) or a
+    -- non-negative percentage. If simsKnown is absent or simsKnown[itemID]
+    -- is falsy, the item has no sim data — return nil (no-data sentinel).
+    local known = char.simsKnown and char.simsKnown[itemID]
+    local pct   = char.sims[itemID]
+    if pct == nil and not known then return nil end
+    -- Item is known (simsKnown[itemID] = true) OR pct is an explicit value.
+    -- Either way we have a result; coerce nil to 0.0.
+    pct = pct or 0.0
     if simReference and simReference > 0 then
         return clamp01(pct / simReference), pct
     end
-    -- No reference (e.g. /bl score from chat): fall back to raw fraction
-    -- so the score is at least monotonic in the upgrade size.
     return pct / 100, pct
 end
 
@@ -70,6 +99,19 @@ local function mplusComponent(char, mplusCap)
     return clamp01(v / mplusCap), v
 end
 
+-- Ordered list of component keys for UI iteration. Both VotingFrame.lua
+-- and LootFrame.lua consume this so ordering is always consistent.
+ns.Scoring.COMPONENT_ORDER = { "sim", "bis", "history", "attendance", "mplus" }
+
+-- Human-readable label for each component key.
+ns.Scoring.COMPONENT_LABEL = {
+    sim        = "Sim upgrade",
+    bis        = "BiS",
+    history    = "Loot received",
+    attendance = "Attendance",
+    mplus      = "M+ dungeons",
+}
+
 -- Public --------------------------------------------------------------------
 
 -- Compute a 0..100 score for (itemID, candidateName).
@@ -81,6 +123,19 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
     local char = data.characters[candidateName]
     if not char then return nil end
 
+    -- item 4.7: scoreOverrides short-circuit.
+    -- If the data file carries a fixed score for this item, return it
+    -- directly without running the formula. No in-game editor; the
+    -- override table is maintained in tools/score-overrides.json.
+    if data.scoreOverrides then
+        local overrideScore = data.scoreOverrides[itemID]
+        if type(overrideScore) == "number" then
+            -- Return score + minimal breakdown so callers that unpack
+            -- two values (score, breakdown) do not error.
+            return overrideScore, { _override = true }
+        end
+    end
+
     local mplusCap   = (profile.overrideCaps and profile.mplusCap)   or data.mplusCap   or 40
     local historyCap = (profile.overrideCaps and profile.historyCap) or data.historyCap or 5
     local simReference     = opts and opts.simReference      -- max sim pct across bidders
@@ -91,6 +146,27 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
     local histVal, histRaw = historyComponent(char, historyCap, historyReference)
     local attVal,  attRaw  = attendanceComponent(char)
     local mpVal,   mpRaw   = mplusComponent(char, mplusCap)
+
+    -- Per-role history multiplier: trial/bench players have reduced history
+    -- influence so they don't score impossibly high due to zero history.
+    if histVal ~= nil then
+        local roleWeights = (profile.roleHistoryWeights) or {}
+        local charRole    = (char.role) or "raider"
+        local roleMult    = roleWeights[charRole]
+        if type(roleMult) == "number" then
+            -- Multiplier < 1 reduces influence; > 1 amplifies.
+            -- Clamp to [0, 2] to guard against accidental extreme values.
+            roleMult = math.max(0, math.min(2, roleMult))
+            -- The history component returns a 0..1 value where 1 = best
+            -- (no loot received). A trial raider with zero history gets
+            -- histVal=1.0 which scores perfectly. Multiplying by < 1
+            -- pulls their history value toward the mid-point (0.5).
+            -- Formula: 0.5 + (histVal - 0.5) * roleMult
+            -- When roleMult=1.0 this is a no-op.
+            histVal = 0.5 + (histVal - 0.5) * roleMult
+            histVal = math.max(0, math.min(1, histVal))
+        end
+    end
 
     local weights = profile.weights or {}
 
@@ -104,7 +180,8 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
     end
 
     local components = {
-        sim        = { value = simVal,  raw = simRaw,  reference = simReference },
+        sim        = { value = simVal,  raw = simRaw,  reference = simReference,
+                       mainspec = char.mainspec },
         bis        = { value = bisVal,  raw = bisRaw                            },
         history    = { value = histVal, raw = histRaw, cap = historyCap,
                        reference = historyReference,
@@ -124,6 +201,7 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
             breakdown[name] = {
                 value = c.value, raw = c.raw, cap = c.cap,
                 breakdown = c.breakdown, reference = c.reference, weight = w,
+                mainspec = c.mainspec,
             }
         end
     end
@@ -139,4 +217,136 @@ function Scoring:Compute(itemID, candidateName, profile, data, opts)
         entry.contribution    = entry.effectiveWeight * entry.value * 100
     end
     return score, breakdown
+end
+
+-- Compute scores for all characters in the loaded data file for a given
+-- itemID. Returns a sorted array:
+--   { { name = "...", score = 74.2, breakdown = {...} }, ... }
+-- Characters with nil scores (missing sim data when sim weight > 0,
+-- or no character entry at all) are excluded from the result.
+-- `profile` defaults to addon.db.profile if ns.addon is available.
+-- `opts` is forwarded to Compute unchanged (simReference, historyReference, etc).
+function Scoring:ComputeAll(itemID, profile, opts)
+    local data = _G.BobleLoot_Data
+    if not data or not data.characters then return {} end
+
+    if not profile then
+        local addonObj = ns.addon
+        profile = addonObj and addonObj.db and addonObj.db.profile
+    end
+    if not profile then return {} end
+
+    local results = {}
+    for name, _ in pairs(data.characters) do
+        local score, breakdown = self:Compute(itemID, name, profile, data, opts)
+        if score ~= nil then
+            results[#results + 1] = { name = name, score = score, breakdown = breakdown }
+        end
+    end
+
+    table.sort(results, function(a, b)
+        return (a.score or 0) > (b.score or 0)
+    end)
+
+    return results
+end
+
+-- ── Score-trend tracking (3.8) ────────────────────────────────────────────
+
+-- Append a score observation to the rolling history for `name`.
+-- Prunes entries older than profile.trendHistoryDays before appending
+-- so the table stays bounded.
+-- This function is a no-op when profile.trackTrends is false.
+function Scoring:RecordScore(name, itemID, score, profile)
+    if not profile or not profile.trackTrends then return end
+    if score == nil then return end
+
+    local history = profile.scoreHistory
+    if type(history) ~= "table" then return end
+
+    local days    = profile.trendHistoryDays or 28
+    local cutoff  = time() - days * 24 * 3600
+    local entries = history[name]
+    if type(entries) ~= "table" then
+        entries = {}
+        history[name] = entries
+    end
+
+    -- Prune stale entries (linear, but arrays are small).
+    local i = 1
+    while i <= #entries do
+        if (entries[i].ts or 0) < cutoff then
+            table.remove(entries, i)
+        else
+            i = i + 1
+        end
+    end
+
+    -- Append new record.
+    entries[#entries + 1] = { ts = time(), score = score, itemID = itemID }
+end
+
+-- Return per-observation records for (name, itemID) within the last `days`.
+-- Returns: { { ts = <unix>, score = <float> }, ... } sorted oldest-first.
+-- Returns {} if no data exists.
+function Scoring:GetScoreTrend(name, itemID, days, profile)
+    if not profile then
+        local addonObj = ns.addon
+        profile = addonObj and addonObj.db and addonObj.db.profile
+    end
+    if not profile then return {} end
+
+    local history = profile.scoreHistory
+    if type(history) ~= "table" then return {} end
+
+    local entries = history[name]
+    if type(entries) ~= "table" then return {} end
+
+    days = days or (profile.trendHistoryDays or 28)
+    local cutoff = time() - days * 24 * 3600
+    local result = {}
+    for _, e in ipairs(entries) do
+        if (e.ts or 0) >= cutoff and e.itemID == itemID then
+            result[#result + 1] = { ts = e.ts, score = e.score }
+        end
+    end
+    -- Already appended in chronological order (RecordScore always appends).
+    return result
+end
+
+-- Return a one-line summary of overall score movement for `name`
+-- across all items in the trend window.
+-- Returns: { first = float, last = float, delta = float, count = int }
+--   or nil if fewer than 2 observations exist.
+function Scoring:GetTrendSummary(name, profile)
+    if not profile then
+        local addonObj = ns.addon
+        profile = addonObj and addonObj.db and addonObj.db.profile
+    end
+    if not profile then return nil end
+
+    local history = profile.scoreHistory
+    if type(history) ~= "table" then return nil end
+
+    local entries = history[name]
+    if type(entries) ~= "table" or #entries < 2 then return nil end
+
+    local days   = profile.trendHistoryDays or 28
+    local cutoff = time() - days * 24 * 3600
+    local valid  = {}
+    for _, e in ipairs(entries) do
+        if (e.ts or 0) >= cutoff then
+            valid[#valid + 1] = e
+        end
+    end
+    if #valid < 2 then return nil end
+
+    local first = valid[1].score
+    local last  = valid[#valid].score
+    return {
+        first = first,
+        last  = last,
+        delta = last - first,
+        count = #valid,
+    }
 end

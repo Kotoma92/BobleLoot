@@ -1,0 +1,28 @@
+[
+  {
+    "id": 1,
+    "name": "Boble",
+    "realm": "Stormrage",
+    "main_spec": "Holy",
+    "status": "raider"
+  },
+  {
+    "id": 2,
+    "name": "Kotoma",
+    "realm": "Twisting Nether",
+    "main_spec": "Protection",
+    "status": "trial"
+  },
+  {
+    "id": 3,
+    "name": "Benchman",
+    "realm": "Stormrage",
+    "main_spec": "Fury",
+    "status": "bench"
+  },
+  {
+    "id": 4,
+    "name": "NoSpec",
+    "realm": "Stormrage"
+  }
+]

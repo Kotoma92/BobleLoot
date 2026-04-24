@@ -1,0 +1,4 @@
+{
+  "_comment": "Character rename / realm transfer map. Format: 'Old Name-OldRealm': 'New Name-NewRealm'. Applied by wowaudit.py before emitting BobleLoot_Data.lua and consumed by LootHistory:Apply at runtime via data.renames.",
+  "_example": "Oldchar-OldRealm: Newchar-NewRealm"
+}

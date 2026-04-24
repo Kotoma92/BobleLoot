@@ -141,6 +141,27 @@ function Reminder:CheckAndWarn(addon)
 
     ensurePopup(addon)
     StaticPopup_Show(POPUP_KEY, fmt(generated), fmt(lastRaid))
+
+    -- Notify the toast system (plan 3.12) via AceEvent so Toast stays
+    -- decoupled from RaidReminder. Compute hoursOld from the data timestamp.
+    local generatedAt = _G.BobleLoot_Data and _G.BobleLoot_Data.generatedAt
+    local hoursOld = 0
+    if generatedAt then
+        -- generatedAt is an ISO-8601 UTC string; time() is Unix seconds.
+        -- Approximate by treating the string as a rough date — if it parses
+        -- to a number (epoch) use it directly; otherwise estimate from lastRaid.
+        local ts = tonumber(generatedAt)
+        if not ts and generated then
+            -- Try to extract from the ISO string if it were epoch-encoded.
+            ts = tonumber(generated:match("^(%d+)$"))
+        end
+        if ts and ts > 0 then
+            hoursOld = math.floor((time() - ts) / 3600)
+        end
+    end
+    if addon.SendMessage then
+        addon:SendMessage("BobleLoot_DataStale", hoursOld)
+    end
 end
 
 function Reminder:Setup(addon)
