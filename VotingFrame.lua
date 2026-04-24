@@ -822,9 +822,10 @@ function VF:Hook(addon, RC)
     -- Attach badge FontString to the st header frame if accessible.
     -- lib-st exposes the header row as st.header; each cell is st.header.cols[i].
     local st = rcVoting.frame and rcVoting.frame.st
+    -- Hoisted out of the freshness-badge block so the ghost-weights
+    -- toggle block below can reuse the same column index.
+    local colIdx
     if st and st.header then
-        -- Find which column index is ours.
-        local colIdx
         for i, col in ipairs(rcVoting.scrollCols) do
             if col.colName == SCORE_COL then colIdx = i; break end
         end
