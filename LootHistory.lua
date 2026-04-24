@@ -445,20 +445,40 @@ local function mergeSynthEntries(result, synthEntries, cutoff)
     end
 end
 
--- Build name -> { total = weighted sum, counts = {bis=N, major=N, ...} }
--- profile (6th param) is used for wasted-loot filtering (3.5). When nil,
--- wasted-loot checks are skipped (backward compat with any ad-hoc callers).
--- synthEntries (7th param) is optional: list of { name, itemID, itemLink, t, synthType, weight }
--- for catalyst/tier-token synthetic entries (roadmap 4.2).
-function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, profile, synthEntries)
-    local cutoff = nil
-    if days and days > 0 then
-        cutoff = time() - days * 24 * 3600
+-- Process one entry; bumps row.counts/row.total in place. Shared by sync
+-- and async count paths. `profile` (nil-safe) enables wasted-loot filtering;
+-- `name` identifies the row owner for IsWasted lookups; `LH` is the module
+-- self-reference so wasted-loot state can be resolved without binding self.
+local function processEntry(e, row, cutoff, weights, minIlvl, profile, name, LH)
+    if type(e) ~= "table" then return end
+    local cat = classify(e)
+    if not cat then return end
+    local t = entryTime(e)
+    local timeOk = (not cutoff) or (not t) or t >= cutoff
+    local ilvl = entryItemLevel(e)
+    local ilvlOk = (minIlvl <= 0) or (ilvl == nil) or (ilvl >= minIlvl)
+    local wastedOk = true
+    if profile and LH and LH.IsWasted then
+        local link = e.lootWon or e.link or e.itemLink
+        local iid = link and C_Item and C_Item.GetItemInfoInstant and
+            select(2, C_Item.GetItemInfoInstant(link))
+        if iid and LH:IsWasted(name, iid, profile) then
+            wastedOk = false
+        end
     end
-    minIlvl = minIlvl or 0
+    if timeOk and ilvlOk and wastedOk then
+        row.counts[cat] = (row.counts[cat] or 0) + 1
+        row.total = row.total + (weights[cat] or 0)
+    end
+end
 
-    -- Merge synthetic entries (vault selections) into a copy of rcLootDB
-    -- so we do not mutate RC's own SavedVariables.
+local function newRow()
+    return { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0, vault = 0 } }
+end
+
+-- Build a merged {name -> {entries...}} table combining the live RC DB
+-- with any player-keyed extra entries (e.g. vault selections).
+local function mergeInputs(rcLootDB, extraEntries)
     local merged = {}
     if type(rcLootDB) == "table" then
         for name, entries in pairs(rcLootDB) do
@@ -479,42 +499,31 @@ function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, p
             end
         end
     end
+    return merged
+end
 
+-- Synchronous: build name -> { total, counts }. Kept for /bl debugchar,
+-- HistoryViewer, and other small-batch callers. On very large RC DBs the
+-- live /bl lootdb path uses the async variant below to avoid tripping
+-- Blizzard's "script ran too long" watchdog.
+-- profile (6th param) enables wasted-loot filtering (3.5). When nil,
+-- wasted-loot checks are skipped.
+-- synthEntries (7th param) is optional: catalyst / tier-token entries
+-- merged via mergeSynthEntries (roadmap 4.2).
+function LH:CountItemsReceived(rcLootDB, days, weights, minIlvl, extraEntries, profile, synthEntries)
+    local cutoff = (days and days > 0) and (time() - days * 24 * 3600) or nil
+    minIlvl = minIlvl or 0
+    local merged = mergeInputs(rcLootDB, extraEntries)
     local result = {}
     for name, entries in pairs(merged) do
         if type(entries) == "table" then
-            local row = { total = 0, counts = { bis = 0, major = 0, mainspec = 0, minor = 0, vault = 0 } }
+            local row = newRow()
             for _, e in ipairs(entries) do
-                if type(e) == "table" then
-                    local cat = classify(e)
-                    if cat then
-                        local t = entryTime(e)
-                        local timeOk = (not cutoff) or (not t) or t >= cutoff
-                        local ilvl = entryItemLevel(e)
-                        -- Items with unknown ilvl are kept (we'd rather
-                        -- count an old entry than silently drop it).
-                        local ilvlOk = (minIlvl <= 0) or (ilvl == nil) or (ilvl >= minIlvl)
-                        -- Wasted-loot check: skip entries flagged as traded away.
-                        local wastedOk = true
-                        if profile then
-                            local link = e.lootWon or e.link or e.itemLink
-                            local iid = link and C_Item and C_Item.GetItemInfoInstant and
-                                select(2, C_Item.GetItemInfoInstant(link))
-                            if iid and self:IsWasted(name, iid, profile) then
-                                wastedOk = false
-                            end
-                        end
-                        if timeOk and ilvlOk and wastedOk then
-                            row.counts[cat] = (row.counts[cat] or 0) + 1
-                            row.total = row.total + (weights[cat] or 0)
-                        end
-                    end
-                end
+                processEntry(e, row, cutoff, weights, minIlvl, profile, name, self)
             end
             result[name] = row
         end
     end
-    -- Merge catalyst / tier-token synthetic entries (roadmap 4.2).
     mergeSynthEntries(result, synthEntries, cutoff)
     return result
 end
@@ -534,13 +543,59 @@ local function resolveRCName(newName, data)
     return newName
 end
 
+-- Async chunked counter (v1.0.3). Yields every CHUNK entries via
+-- C_Timer.After(0, ...) so we never trip Blizzard's "script ran too
+-- long" watchdog on multi-thousand-entry RC histories. Calls onDone(rows)
+-- when finished. Accepts the same extended semantics as the sync variant.
+local CHUNK = 400
+function LH:CountItemsReceivedAsync(rcLootDB, days, weights, minIlvl,
+                                    extraEntries, profile, synthEntries, onDone)
+    local cutoff = (days and days > 0) and (time() - days * 24 * 3600) or nil
+    minIlvl = minIlvl or 0
+    local merged = mergeInputs(rcLootDB, extraEntries)
+    local result = {}
+    local names = {}
+    for name, entries in pairs(merged) do
+        if type(entries) == "table" then names[#names + 1] = name end
+    end
+    local LH = self
+    local ni = 1
+    local function step()
+        local processed = 0
+        while ni <= #names do
+            local name = names[ni]
+            local entries = merged[name]
+            local row = result[name] or newRow()
+            result[name] = row
+            local i = (row._cursor or 0) + 1
+            local n = #entries
+            while i <= n do
+                processEntry(entries[i], row, cutoff, weights, minIlvl, profile, name, LH)
+                processed = processed + 1
+                i = i + 1
+                if processed >= CHUNK then
+                    row._cursor = i - 1
+                    return C_Timer.After(0, step)
+                end
+            end
+            row._cursor = nil
+            ni = ni + 1
+        end
+        for _, r in pairs(result) do r._cursor = nil end
+        mergeSynthEntries(result, synthEntries, cutoff)
+        onDone(result)
+    end
+    step()
+end
+
 -- Walk our loaded data file and overwrite itemsReceived using the live
 -- counts. Names in the data file are "Name-Realm"; RC keys them the same
--- way ("Sprinty-Doomhammer"), so they line up directly.
+-- way ("Sprinty-Doomhammer"), so they line up directly (modulo renames).
 function LH:Apply(addon)
+    if self._applying then return end
     -- Refresh schema detection on every Apply so the stored verdict
-    -- reflects the current RC SavedVar state. No chat warning here;
-    -- the first-session warning is throttled in Setup.
+    -- reflects the current RC SavedVar state. The first-session warning
+    -- itself is throttled in Setup.
     self:DetectSchemaVersion(nil, addon)
 
     local data = addon:GetData()
@@ -553,25 +608,29 @@ function LH:Apply(addon)
     local days    = profile.lootHistoryDays or DEFAULT_DAYS
     local minIlvl = profile.lootMinIlvl or DEFAULT_MIN_ILVL
     local weights = effectiveWeights(profile)
-    local rows    = self:CountItemsReceived(db, days, weights, minIlvl,
-                                            profile.vaultEntries or {}, profile,
-                                            profile.synthHistory or {})
-    local matched, scanned = 0, 0
-    for name, _ in pairs(rows) do scanned = scanned + 1 end
-    for name, char in pairs(data.characters) do
-        -- item 4.5: apply character renames before lookup so realm-transferred
-        -- characters are matched by their old RC key when data.renames is present.
-        local rcName = resolveRCName(name, data)
-        local r = rows[rcName]
-        if r then
-            char.itemsReceived          = r.total
-            char.itemsReceivedBreakdown = r.counts
-            matched = matched + 1
-        end
-    end
-    self.lastApply   = time()
-    self.lastMatched = matched
-    self.lastScanned = scanned
+    self._applying = true
+    self:CountItemsReceivedAsync(db, days, weights, minIlvl,
+        profile.vaultEntries or {}, profile, profile.synthHistory or {},
+        function(rows)
+            self._applying = false
+            if not data or not data.characters then return end
+            local matched, scanned = 0, 0
+            for _ in pairs(rows) do scanned = scanned + 1 end
+            for name, char in pairs(data.characters) do
+                -- item 4.5: apply renames before lookup so realm-transferred
+                -- characters match by old RC key when data.renames is present.
+                local rcName = resolveRCName(name, data)
+                local r = rows[rcName]
+                if r then
+                    char.itemsReceived          = r.total
+                    char.itemsReceivedBreakdown = r.counts
+                    matched = matched + 1
+                end
+            end
+            self.lastApply   = time()
+            self.lastMatched = matched
+            self.lastScanned = scanned
+        end)
 end
 
 -- Diagnostic helper used by /bl lootdb.

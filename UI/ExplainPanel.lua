@@ -402,8 +402,8 @@ local function Populate(itemID, name, opts)
                 }
             else
                 -- Trend summary line (full sparkline rendering in later batches).
-                local summary = ns.Scoring:GetTrendSummary and
-                                ns.Scoring:GetTrendSummary(name, profile)
+                local summary = ns.Scoring.GetTrendSummary
+                                and ns.Scoring:GetTrendSummary(name, profile)
                 if summary then
                     local sign = (summary.delta >= 0) and "+" or ""
                     lines[#lines+1] = {

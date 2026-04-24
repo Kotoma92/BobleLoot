@@ -17,22 +17,15 @@ _G.BobleLoot = BobleLoot
 BobleLoot.version = "2.0.0-dev"
 BobleLoot._rcHooked = false   -- set true when TryHookRC succeeds (4.10)
 
--- Pending awards: { [fingerprint] = { name, itemID, ts } }
--- Populated by LH:RegisterPendingAward (called from LH:Setup event handlers).
--- Pruned by BobleLoot:PrunePendingAwards.
 BobleLoot._pendingAwards = BobleLoot._pendingAwards or {}
 
--- StaticPopup for /bl importpaste (roadmap 4.3).
--- Defined at module level so it is registered once during addon load.
--- BobleLoot is referenced by the global _G.BobleLoot; safe because StaticPopup
--- callbacks fire at interaction time, long after addon initialisation.
 StaticPopupDialogs["BOBLELOOT_IMPORT_PASTE"] = {
     text = "Paste BobleLoot export JSON below:\n(use /bl importpaste to open)",
     button1 = "Import",
     button2 = "Cancel",
     hasEditBox = true,
     editBoxWidth = 500,
-    maxLetters = 0,           -- no limit; JSON bundles can be several KB
+    maxLetters = 0,
     OnAccept = function(self)
         local text = self.editBox and self.editBox:GetText()
                      or self.EditBox and self.EditBox:GetText()
@@ -573,13 +566,12 @@ function BobleLoot:OnSlashCommand(input)
         if ns.LootHistory then
             if ns.LootHistory.Diagnose then ns.LootHistory:Diagnose(self) end
 
-            -- Schema detection output.
             local verdict = ns.LootHistory.lastVerdictForDiag
                          or (ns.LootHistory.DetectSchemaVersion
                              and ns.LootHistory:DetectSchemaVersion(nil, self))
             if verdict then
                 local colour = (verdict.status == "ok")
-                    and "|cff19CC4D"   -- green
+                    and "|cff19CC4D"
                     or  (verdict.status == "degraded" and "|cffFFA600" or "|cffE63333")
                 self:Print(string.format(
                     "RC schema status: %s%s|r  (check #%d, RC v%s, at %s)",
@@ -597,10 +589,26 @@ function BobleLoot:OnSlashCommand(input)
                 end
             end
 
+            local before = ns.LootHistory.lastApply or 0
             ns.LootHistory:Apply(self)
-            local lh = ns.LootHistory
-            self:Print(string.format("Re-applied loot history. matched=%d scanned=%d source=%s",
-                lh.lastMatched or 0, lh.lastScanned or 0, lh.lastSource or "?"))
+            self:Print("Loot history scan started (runs in background)...")
+            -- Apply is async (chunked across frames) since v1.0.3; poll
+            -- for the next lastApply tick and report when done. 30s cap.
+            local addonRef = self
+            local started = time()
+            local function poll()
+                local lh = ns.LootHistory
+                if (lh.lastApply or 0) > before then
+                    addonRef:Print(string.format(
+                        "Re-applied loot history. matched=%d scanned=%d source=%s",
+                        lh.lastMatched or 0, lh.lastScanned or 0, lh.lastSource or "?"))
+                elseif time() - started < 30 then
+                    C_Timer.After(0.5, poll)
+                else
+                    addonRef:Print("Loot history scan timed out (>30s).")
+                end
+            end
+            C_Timer.After(0.5, poll)
         else
             self:Print("LootHistory module not loaded.")
         end

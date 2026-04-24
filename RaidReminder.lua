@@ -69,10 +69,6 @@ local function ensurePopup(addon)
                 Reminder:SnoozeUntilNextRaid(addon)
             end,
             OnButton3    = function() end,
-            -- Some clients invoke OnAccept/OnCancel instead of OnButtonN;
-            -- keep them as safe fallbacks.
-            OnAccept     = function() StaticPopup_Show(POPUP_CMD_KEY) end,
-            OnCancel     = function() Reminder:SnoozeUntilNextRaid(addon) end,
             timeout      = 0,
             whileDead    = true,
             hideOnEscape = true,
@@ -207,7 +203,6 @@ local function ensureSimPopup(addon)
                 p.simReminderSnoozeUntil = time() + 24 * 3600
             end,
             OnButton3    = function() end,
-            OnAccept     = function() StaticPopup_Show(POPUP_URL_KEY) end,
             timeout      = 0,
             whileDead    = true,
             hideOnEscape = true,
