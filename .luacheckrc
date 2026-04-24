@@ -139,6 +139,7 @@ self = false
 --  421 — shadowing local
 --  431 — shadowing upvalue (closure-heavy UI callbacks)
 --  432 — shadowing upvalue argument
+--  512 — loop executed at most once (legitimate early-return-first idiom)
 ignore = {
     "211",
     "212",
@@ -149,6 +150,7 @@ ignore = {
     "421",
     "431",
     "432",
+    "512",
 }
 
 -- Addon-private helpers declared without `local` — treat them as
