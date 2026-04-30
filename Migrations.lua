@@ -71,20 +71,26 @@ Migrations.list = {
     {
         version = 2,
         up = function(profile)
+            local touched = 0
             if profile.scoreHistory == nil then
-                profile.scoreHistory = {}
+                profile.scoreHistory = {}; touched = touched + 1
             end
             if profile.wastedLootMap == nil then
-                profile.wastedLootMap = {}
+                profile.wastedLootMap = {}; touched = touched + 1
             end
             if profile.trackTrends == nil then
-                profile.trackTrends = true
+                profile.trackTrends = true; touched = touched + 1
             end
             if profile.trendHistoryDays == nil then
-                profile.trendHistoryDays = 28
+                profile.trendHistoryDays = 28; touched = touched + 1
             end
-            DEFAULT_CHAT_FRAME:AddMessage(
-                "|cffffcc00BobleLoot migration v2:|r initialised scoreHistory and wastedLootMap.")
+            -- Only chat on real upgrades. Fresh installs (dbVersion==0
+            -- before this run) get all defaults from AceDB and don't
+            -- need a migration trail in chat.
+            if touched > 0 and (profile.dbVersion or 0) >= 1 then
+                DEFAULT_CHAT_FRAME:AddMessage(
+                    "|cffffcc00BobleLoot migration v2:|r initialised scoreHistory and wastedLootMap.")
+            end
         end,
     },
     -- v3: Initialise 4.2 catalyst/tier-token synthetic history keys.
@@ -94,14 +100,17 @@ Migrations.list = {
     {
         version = 3,
         up = function(profile)
+            local touched = 0
             if profile.synthHistory == nil then
-                profile.synthHistory = {}
+                profile.synthHistory = {}; touched = touched + 1
             end
             if profile.synthWeight == nil then
-                profile.synthWeight = 0.75
+                profile.synthWeight = 0.75; touched = touched + 1
             end
-            DEFAULT_CHAT_FRAME:AddMessage(
-                "|cffffcc00BobleLoot migration v3:|r initialised synthHistory and synthWeight.")
+            if touched > 0 and (profile.dbVersion or 0) >= 2 then
+                DEFAULT_CHAT_FRAME:AddMessage(
+                    "|cffffcc00BobleLoot migration v3:|r initialised synthHistory and synthWeight.")
+            end
         end,
     },
 }
@@ -123,11 +132,15 @@ function Migrations:Run(profile)
                 profile.dbVersion = migration.version
                 current = migration.version
             else
-                -- Log but continue; a failed migration should not block
-                -- the addon from loading.
+                -- A failed migration leaves dbVersion at the last success.
+                -- Stop here rather than running later migrations against a
+                -- partially-initialised profile — the next login will
+                -- retry from this version.
                 DEFAULT_CHAT_FRAME:AddMessage(string.format(
-                    "|cffff5555BobleLoot migration v%d failed: %s|r",
+                    "|cffff5555BobleLoot migration v%d failed: %s|r "
+                    .. "(skipping later migrations until next login)",
                     migration.version, tostring(err)))
+                return
             end
         end
     end

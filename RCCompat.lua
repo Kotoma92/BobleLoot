@@ -133,8 +133,11 @@ RESOLVER_MATRIX["3"] = {
     name = "rc-v3",
 
     sessionItemID = function(rcVoting, session)
-        local lt = rcVoting.GetLootTable and rcVoting:GetLootTable()
-        if not lt or not lt[session] then return nil end
+        -- Resolver contract: must NEVER error. RC's GetLootTable can throw
+        -- mid-teardown, so isolate it.
+        if not rcVoting.GetLootTable then return nil end
+        local ok, lt = pcall(rcVoting.GetLootTable, rcVoting)
+        if not ok or not lt or not lt[session] then return nil end
         local entry = lt[session]
         if entry.link then
             local id = tonumber(entry.link:match("item:(%d+)"))

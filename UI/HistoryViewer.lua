@@ -333,8 +333,12 @@ local function BuildFrame()
     slider:SetValueStep(1)
     slider:SetWidth(120)
     slider:SetHeight(16)
-    _G[sliderName .. "Low"]:SetText("7d")
-    _G[sliderName .. "High"]:SetText("90d")
+    -- OptionsSliderTemplate populates $parentLow/$parentHigh as global
+    -- siblings; nil-guard in case a future template change removes them.
+    local lowFS  = _G[sliderName .. "Low"]
+    local highFS = _G[sliderName .. "High"]
+    if lowFS  then lowFS:SetText("7d")   end
+    if highFS then highFS:SetText("90d") end
 
     local sliderValLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     sliderValLabel:SetFont(T.fontBody, T.sizeSmall)
@@ -460,13 +464,26 @@ end
 
 -- ── Fallback FontString renderer ──────────────────────────────────────
 
+-- FontStrings can't be destroyed; reuse them from a pool keyed by index.
+-- _acquireFB grabs the next slot, configuring or creating as needed.
+local function _acquireFB(content, index, w, layer, font, size, flags, color)
+    local fs = fbRows[index]
+    if not fs then
+        fs = content:CreateFontString(nil, layer or "OVERLAY", "GameFontNormal")
+        fbRows[index] = fs
+    end
+    fs:SetFont(font, size, flags)
+    fs:SetTextColor(color[1], color[2], color[3])
+    fs:SetSize(w, 16)
+    fs:Show()
+    return fs
+end
+
 function HV:_DrawFallback()
     if not frame or not frame._sfContent then return end
     local T = ns.Theme
     local content = frame._sfContent
-    -- Clear existing rows.
-    for _, r in ipairs(fbRows) do r:Hide() end
-    fbRows = {}
+    local used = 0
 
     -- Header row
     local colWidths = { 120, 200, 80, 100, 80 }
@@ -474,14 +491,13 @@ function HV:_DrawFallback()
     local hdrY = 0
     local x = 0
     for i, w in ipairs(colWidths) do
-        local fs = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        fs:SetFont(T.fontBody, T.sizeSmall, "OUTLINE")
-        fs:SetTextColor(T.accent[1], T.accent[2], T.accent[3])
-        fs:SetSize(w, 16)
+        used = used + 1
+        local fs = _acquireFB(content, used, w, "OVERLAY",
+                              T.fontBody, T.sizeSmall, "OUTLINE", T.accent)
+        fs:ClearAllPoints()
         fs:SetPoint("TOPLEFT", content, "TOPLEFT", x, hdrY)
         fs:SetJustifyH(i >= 5 and "RIGHT" or (i == 3 and "CENTER" or "LEFT"))
         fs:SetText(colNames[i])
-        fbRows[#fbRows + 1] = fs
         x = x + w
     end
 
@@ -506,14 +522,13 @@ function HV:_DrawFallback()
             string.format("%.2f", row.credit),
         }
         for i, w in ipairs(colWidths) do
-            local fs = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            fs:SetFont(T.fontBody, T.sizeSmall)
-            fs:SetTextColor(T.white[1], T.white[2], T.white[3])
-            fs:SetSize(w, 16)
+            used = used + 1
+            local fs = _acquireFB(content, used, w, "OVERLAY",
+                                  T.fontBody, T.sizeSmall, nil, T.white)
+            fs:ClearAllPoints()
             fs:SetPoint("TOPLEFT", content, "TOPLEFT", x, rowY)
             fs:SetJustifyH(i >= 5 and "RIGHT" or (i == 3 and "CENTER" or "LEFT"))
             fs:SetText(rowData[i] or "")
-            fbRows[#fbRows + 1] = fs
             x = x + w
         end
     end
@@ -521,16 +536,18 @@ function HV:_DrawFallback()
     -- Total rows at the bottom of the page.
     local totalY = hdrY - (pageEnd - pageStart + 2) * 16 - 8
     for _, tot in ipairs(totalRows) do
-        local fs = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        fs:SetFont(T.fontBody, T.sizeSmall, "OUTLINE")
-        fs:SetTextColor(T.accent[1], T.accent[2], T.accent[3])
-        fs:SetSize(FRAME_W - 24, 16)
+        used = used + 1
+        local fs = _acquireFB(content, used, FRAME_W - 24, "OVERLAY",
+                              T.fontBody, T.sizeSmall, "OUTLINE", T.accent)
+        fs:ClearAllPoints()
         fs:SetPoint("TOPLEFT", content, "TOPLEFT", 0, totalY)
         fs:SetJustifyH("LEFT")
         fs:SetText(string.format("%s  |  Weighted total: %.2f", tot.name, tot.total))
-        fbRows[#fbRows + 1] = fs
         totalY = totalY - 16
     end
+
+    -- Hide any pool entries we didn't consume this draw.
+    for i = used + 1, #fbRows do fbRows[i]:Hide() end
 end
 
 -- ── Public API ────────────────────────────────────────────────────────

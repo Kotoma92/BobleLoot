@@ -74,9 +74,21 @@ local function entryItemID(entry)
     )
 end
 
+-- Per-mode score color, delegated to Theme. Falls back to a hardcoded
+-- ramp only if Theme is missing entirely (early load corner case).
 local function colorFor(score)
-    if score >= 70 then     return "|cff40ff40" end
-    if score >= 40 then     return "|cffffd040" end
+    local T = ns.Theme
+    if T and T.ScoreColor then
+        local c = T.ScoreColor(score)
+        if type(c) == "table" then
+            return string.format("|cff%02x%02x%02x",
+                math.floor((c[1] or 0) * 255),
+                math.floor((c[2] or 0) * 255),
+                math.floor((c[3] or 0) * 255))
+        end
+    end
+    if score >= 70 then return "|cff40ff40" end
+    if score >= 40 then return "|cffffd040" end
     return "|cffff5050"
 end
 

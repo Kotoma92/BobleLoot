@@ -95,7 +95,10 @@ local function mplusComponent(char, mplusCap)
     -- this season). Prefer the new field, fall back to the old.
     local v = char.mplusDungeons or char.mplusScore
     if v == nil then return nil end
-    if mplusCap <= 0 then return 0, v end
+    -- A non-positive cap means "M+ disabled" — return nil so the component
+    -- is excluded from the weighted sum, rather than 0 which would drag
+    -- everyone's score down.
+    if mplusCap <= 0 then return nil end
     return clamp01(v / mplusCap), v
 end
 

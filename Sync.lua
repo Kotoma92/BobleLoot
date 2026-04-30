@@ -791,8 +791,19 @@ function Sync:OnComm(addon, prefix, message, dist, sender)
             self:_recordWarning(sender, "DATACHUNK on proto < 3 rejected")
             return
         end
-        -- Only accept from group members (same guard as DATA/SCORES).
+        -- Same auth as KIND_DATA: group-member AND (leader OR whitelisted).
+        -- Without the trusted-sender gate, any raid member could stream an
+        -- arbitrary dataset that overwrites _G.BobleLoot_Data on every peer.
         if not (UnitInRaid(sender) or UnitInParty(sender)) then return end
+        if not isDataSenderTrusted(sender) then
+            self._rejectedSenders = self._rejectedSenders or {}
+            if not self._rejectedSenders[sender] then
+                self._rejectedSenders[sender] = true
+                self:_recordWarning(sender,
+                    "DATACHUNK rejected (not leader / not trusted): " .. sender)
+            end
+            return
+        end
         self:_onReceiveChunk(addon, msg, sender)
 
     elseif msg.kind == KIND_DATA then

@@ -117,12 +117,14 @@ end
 -- or already a flat name->entries map.
 local function looksLikeFactionRealm(db)
     if type(db) ~= "table" then return false end
+    -- Scan all keys; previously a bare `return false` lived inside the loop
+    -- body and exited on the first non-matching key, so any DB whose first
+    -- pairs-iterated key wasn't factionrealm-shaped was misclassified.
     for k, v in pairs(db) do
         if type(k) == "string" and type(v) == "table"
            and k:find(" %- ") then  -- "<Faction> - <Realm>"
             return true
         end
-        return false
     end
     return false
 end
@@ -201,6 +203,10 @@ end
 -- Kept in sync with RCCompat.lua RESOLVER_MATRIX manually.
 local function entryTime(entry)
     local t = entry.time or entry.timestamp
+    -- Some RC SavedVariables flavours coerce the timestamp to a string
+    -- on serialise/deserialise. Without this coercion a string-typed
+    -- time was treated as nil and the entry bypassed the day window.
+    if type(t) == "string" then t = tonumber(t) end
     if type(t) == "number" then return t end
     local d, m, y = string.match(entry.date or "", "^(%d+)/(%d+)/(%d+)$")
     if d then
@@ -612,24 +618,31 @@ function LH:Apply(addon)
     self:CountItemsReceivedAsync(db, days, weights, minIlvl,
         profile.vaultEntries or {}, profile, profile.synthHistory or {},
         function(rows)
+            -- Clear the re-entry guard FIRST so an error inside the body
+            -- doesn't leave _applying stuck true forever (which silently
+            -- locks every future Apply call until the next /reload).
             self._applying = false
-            if not data or not data.characters then return end
-            local matched, scanned = 0, 0
-            for _ in pairs(rows) do scanned = scanned + 1 end
-            for name, char in pairs(data.characters) do
-                -- item 4.5: apply renames before lookup so realm-transferred
-                -- characters match by old RC key when data.renames is present.
-                local rcName = resolveRCName(name, data)
-                local r = rows[rcName]
-                if r then
-                    char.itemsReceived          = r.total
-                    char.itemsReceivedBreakdown = r.counts
-                    matched = matched + 1
+            local ok, err = pcall(function()
+                if not data or not data.characters then return end
+                local matched, scanned = 0, 0
+                for _ in pairs(rows) do scanned = scanned + 1 end
+                for name, char in pairs(data.characters) do
+                    local rcName = resolveRCName(name, data)
+                    local r = rows[rcName]
+                    if r then
+                        char.itemsReceived          = r.total
+                        char.itemsReceivedBreakdown = r.counts
+                        matched = matched + 1
+                    end
                 end
+                self.lastApply   = time()
+                self.lastMatched = matched
+                self.lastScanned = scanned
+            end)
+            if not ok and DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+                DEFAULT_CHAT_FRAME:AddMessage(
+                    "|cffff5555[BobleLoot]|r LH:Apply onDone error: " .. tostring(err))
             end
-            self.lastApply   = time()
-            self.lastMatched = matched
-            self.lastScanned = scanned
         end)
 end
 
