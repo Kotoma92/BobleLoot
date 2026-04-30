@@ -61,15 +61,24 @@ local function MakeSection(parent, title)
     local card = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     T.ApplyBackdrop(card, "bgSurface", "borderNormal")
 
-    local heading = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    heading:SetFont(T.fontBody, T.sizeHeading, "OUTLINE")
-    heading:SetTextColor(T.accent[1], T.accent[2], T.accent[3], T.accent[4])
-    heading:SetPoint("TOPLEFT", card, "TOPLEFT", 8, -6)
-    heading:SetText(title)
+    -- Skip the heading FontString entirely when the title is blank
+    -- (used by banner cards that draw their own message). Otherwise
+    -- the heading + inner padding eats 32px of the card for nothing.
+    local hasTitle = type(title) == "string" and title ~= ""
+    if hasTitle then
+        local heading = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        heading:SetFont(T.fontBody, T.sizeHeading, "OUTLINE")
+        heading:SetTextColor(T.accent[1], T.accent[2], T.accent[3], T.accent[4])
+        heading:SetPoint("TOPLEFT", card, "TOPLEFT", 8, -6)
+        heading:SetText(title)
+    end
 
-    -- Inner content region starts below the heading.
+    -- Inner content region starts below the heading. With a heading the
+    -- 32px top inset gives a first slider at y=-4 room for its label,
+    -- which MakeSlider anchors ABOVE the slider track and which extends
+    -- ~14px upward. Without a heading we only need a small chrome inset.
     local inner = CreateFrame("Frame", nil, card)
-    inner:SetPoint("TOPLEFT",     card, "TOPLEFT",  6, -22)
+    inner:SetPoint("TOPLEFT",     card, "TOPLEFT",  6, hasTitle and -32 or -6)
     inner:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -6, 6)
 
     return card, inner
@@ -743,10 +752,10 @@ function BuildTuningTab(parent)
     local card, inner = MakeSection(body, "Scoring tuning")
     card:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
     card:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6)
-    -- Deepest control: synth slider track at y=-460 → bottom of slider
-    -- frame at -490. Inner = card_h - 22 (header) - 6 (pad). So 528 gives
-    -- 500 inner, leaving 10px below the slider.
-    card:SetHeight(528)
+    -- Deepest control: synth slider track at inner y=-460. Inner top is
+    -- now offset 32 below card top (was 22), so card needs +10 to keep
+    -- the same usable inner height.
+    card:SetHeight(538)
 
     -- Track control references for conditional show/hide.
     local simCapSld, mplusCapSld, histCapSld, synthWeightSld
@@ -897,7 +906,7 @@ function BuildTuningTab(parent)
     -- conflictSld (lbl + track ≈ 36px), conflictHint (~28px wrapped),
     -- colorModeLbl (14), colorModeHint (~28px wrapped), colorModeDropdown
     -- (28). Total ≈ 144 inner → 172 outer with margins.
-    dispCard:SetHeight(180)
+    dispCard:SetHeight(190)
 
     -- Conflict threshold slider (integer 0-20).
     local conflictSld = MakeSlider(dispInner, {
@@ -1010,7 +1019,7 @@ function BuildTuningTab(parent)
     local trendCard, trendInner = MakeSection(body, "Score trend tracking")
     trendCard:SetPoint("TOPLEFT",  dispCard, "BOTTOMLEFT",  0, -8)
     trendCard:SetPoint("TOPRIGHT", dispCard, "BOTTOMRIGHT", 0, -8)
-    trendCard:SetHeight(100)
+    trendCard:SetHeight(110)
 
     local trackTog = MakeToggle(trendInner, {
         label   = "Track per-night score trends (leader only)",
@@ -1050,8 +1059,8 @@ function BuildTuningTab(parent)
     local ghostCard, ghostInner = MakeSection(body, "Ghost Weights Preset")
     ghostCard:SetPoint("TOPLEFT",  trendCard, "BOTTOMLEFT",  0, -8)
     ghostCard:SetPoint("TOPRIGHT", trendCard, "BOTTOMRIGHT", 0, -8)
-    ghostCard:SetHeight(170)
-    ghostInner:SetHeight(150)
+    ghostCard:SetHeight(180)
+    ghostInner:SetHeight(160)
 
     local T2 = ns.Theme
     local ghostNote = ghostInner:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1294,7 +1303,7 @@ function BuildDataTab(parent)
     local rcBannerCard, rcBannerInner = MakeSection(body, "")
     rcBannerCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
     rcBannerCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6)
-    rcBannerCard:SetHeight(44)
+    rcBannerCard:SetHeight(RC_BANNER_H)
     T.ApplyBackdrop(rcBannerCard, "bgSurface", "borderNormal")
     rcBannerCard:Hide()  -- hidden until BobleLoot_RCMissing fires
 
@@ -1307,12 +1316,14 @@ function BuildDataTab(parent)
         "|cffff5555RCLootCouncil not detected. "
         .. "Score column will appear once RC loads.|r")
 
-    -- Card heights (used by the layout chain).
-    local RC_BANNER_H    = 44
-    local DRIFT_BANNER_H = 52
-    local INFO_H         = 86
-    local ACT_H          = 70
-    local RC_INTEG_H     = 64
+    -- Card heights (used by the layout chain). All bumped by 10 from the
+    -- pre-MakeSection-padding-fix values to keep usable inner space the
+    -- same now that inner is inset 10px further from the card top.
+    local RC_BANNER_H    = 54
+    local DRIFT_BANNER_H = 62
+    local INFO_H         = 96
+    local ACT_H          = 80
+    local RC_INTEG_H     = 74
     -- transCard height is set when it's built below.
 
     -- Visibility tracking flags for the two banners.
@@ -1570,9 +1581,10 @@ function BuildDataTab(parent)
     -- ── Transparency card ─────────────────────────────────────────────
     -- Height accommodates: transTog (y=-4), transHintLbl (y=-28),
     -- suppressTog (y=-58), suppressHint (y=-76) + 2-line wrap + padding.
+    -- +10 vs prior fix to absorb MakeSection's deeper inner offset.
     local transInner
     transCard, transInner = MakeSection(body, "Transparency mode")
-    transCard:SetHeight(120)
+    transCard:SetHeight(130)
 
     local transTog -- toggled in OnShow
 
