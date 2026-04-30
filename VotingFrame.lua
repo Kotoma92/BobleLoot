@@ -831,8 +831,13 @@ function VF:Hook(addon, RC)
         end
         if colIdx and st.header.cols and st.header.cols[colIdx] then
             local headerCell = st.header.cols[colIdx]
+            -- Anchor below the header cell rather than inside it: the
+            -- column is too narrow (≈50px) to host both the lib-st
+            -- "Score" label, the freshness badge, and the ghost-weights
+            -- toggle without text overlap. Sitting just below keeps the
+            -- column header clean and gives the badge its own space.
             local badge = headerCell:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            badge:SetPoint("TOPRIGHT", headerCell, "TOPRIGHT", 0, 0)
+            badge:SetPoint("TOPRIGHT", headerCell, "BOTTOMRIGHT", 0, -1)
             badge:SetText("")
             VF._freshnessBadge = badge
             refreshFreshnessBadge()
@@ -849,10 +854,13 @@ function VF:Hook(addon, RC)
         local headerCell = st.header.cols[colIdx]
         local T = ns.Theme
 
+        -- Score column is ~50px; the lib-st header label "Score" already
+        -- occupies most of that. Anchor the toggle BELOW the header cell
+        -- (next to the freshness badge) instead of inside it, so the
+        -- column header text stays readable.
         local ghostBtn = CreateFrame("Button", nil, headerCell)
         ghostBtn:SetSize(34, 14)
-        -- Sit to the left of the freshness badge; badge is at TOPRIGHT.
-        ghostBtn:SetPoint("TOPRIGHT", headerCell, "TOPRIGHT", -8, -2)
+        ghostBtn:SetPoint("TOPLEFT", headerCell, "BOTTOMLEFT", 2, -1)
 
         local btnTex = ghostBtn:CreateTexture(nil, "BACKGROUND")
         btnTex:SetAllPoints()

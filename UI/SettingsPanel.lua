@@ -743,9 +743,10 @@ function BuildTuningTab(parent)
     local card, inner = MakeSection(body, "Scoring tuning")
     card:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
     card:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6)
-    -- Fixed height: deepest control (synth weight slider, roadmap 4.2) sits
-    -- at y=-446 inside inner; add inner offset (22) + slider height (30) + padding (18).
-    card:SetHeight(500)
+    -- Deepest control: synth slider track at y=-460 → bottom of slider
+    -- frame at -490. Inner = card_h - 22 (header) - 6 (pad). So 528 gives
+    -- 500 inner, leaving 10px below the slider.
+    card:SetHeight(528)
 
     -- Track control references for conditional show/hide.
     local simCapSld, mplusCapSld, histCapSld, synthWeightSld
@@ -860,6 +861,8 @@ function BuildTuningTab(parent)
     -- Allows tuning how much catalyst/tier-token entries count relative to
     -- a normal RC boss-drop (1.0 = equal weight, 0.75 = default, 0 = exclude).
     local synthLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    -- Pushed down from -428 to -428: needs ~16px clearance above the
+    -- MakeSlider 'Synth weight' label which sits above the track at -460.
     synthLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -428)
     synthLabel:SetText("Synthetic history (catalyst/token) weight")
     synthLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
@@ -874,7 +877,7 @@ function BuildTuningTab(parent)
         isPercent = false,
         width   = 220,
         x       = 4,
-        y       = -446,
+        y       = -460,
         get = function()
             return (addon and addon.db.profile.synthWeight) or 0.75
         end,
@@ -890,7 +893,11 @@ function BuildTuningTab(parent)
     local dispCard, dispInner = MakeSection(body, "Display")
     dispCard:SetPoint("TOPLEFT",  card, "BOTTOMLEFT",  0, -8)
     dispCard:SetPoint("TOPRIGHT", card, "BOTTOMRIGHT", 0, -8)
-    dispCard:SetHeight(120)
+    -- Inner at 22 header + 6 bottom pad = 28 chrome. Need to fit:
+    -- conflictSld (lbl + track ≈ 36px), conflictHint (~28px wrapped),
+    -- colorModeLbl (14), colorModeHint (~28px wrapped), colorModeDropdown
+    -- (28). Total ≈ 144 inner → 172 outer with margins.
+    dispCard:SetHeight(180)
 
     -- Conflict threshold slider (integer 0-20).
     local conflictSld = MakeSlider(dispInner, {
@@ -931,20 +938,14 @@ function BuildTuningTab(parent)
         .. "both cells show a ~ prefix. Set to 0 to disable.")
 
     -- ── Color mode dropdown (4.11) ────────────────────────────────────────
+    -- Color-mode label sits below conflictHint with 12px clearance.
+    -- Hint text wraps so we put it BELOW the dropdown (not between label
+    -- and dropdown, where the dropdown chrome would overlap it).
     local colorModeLbl = dispInner:CreateFontString(nil, "OVERLAY")
     colorModeLbl:SetFont(T.fontBody, T.sizeBody)
     colorModeLbl:SetTextColor(T.white[1], T.white[2], T.white[3])
-    colorModeLbl:SetPoint("TOPLEFT", dispInner, "TOPLEFT", 4, -52)
+    colorModeLbl:SetPoint("TOPLEFT", dispInner, "TOPLEFT", 4, -68)
     colorModeLbl:SetText("Color mode")
-
-    local colorModeHint = dispInner:CreateFontString(nil, "OVERLAY")
-    colorModeHint:SetFont(T.fontBody, T.sizeSmall)
-    colorModeHint:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
-    colorModeHint:SetPoint("TOPLEFT", colorModeLbl, "BOTTOMLEFT", 0, -2)
-    colorModeHint:SetWidth(340)
-    colorModeHint:SetText(
-        "Default = red/amber/green.  Deuter/Protan = orange/blue.  "
-        .. "High Contrast = filled cell background, white text.")
 
     -- Color mode options in display order.
     local COLOR_MODE_OPTIONS = {
@@ -955,8 +956,21 @@ function BuildTuningTab(parent)
 
     local colorModeDropdown = CreateFrame("Frame", "BobleLootColorModeDropdown",
         dispInner, "UIDropDownMenuTemplate")
-    colorModeDropdown:SetPoint("TOPLEFT", colorModeLbl, "TOPLEFT", 110, 4)
+    -- Drop offset y=+6 vertically centres the dropdown's button text
+    -- against the colorModeLbl baseline (UIDropDownMenuTemplate has 6px
+    -- of internal top chrome above the visible button).
+    colorModeDropdown:SetPoint("TOPLEFT", colorModeLbl, "TOPLEFT", 80, 6)
     UIDropDownMenu_SetWidth(colorModeDropdown, 240)
+
+    -- Hint sits below the dropdown so its chrome can't overlap text.
+    local colorModeHint = dispInner:CreateFontString(nil, "OVERLAY")
+    colorModeHint:SetFont(T.fontBody, T.sizeSmall)
+    colorModeHint:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+    colorModeHint:SetPoint("TOPLEFT", colorModeLbl, "BOTTOMLEFT", 0, -28)
+    colorModeHint:SetWidth(480)
+    colorModeHint:SetText(
+        "Default = red/amber/green.  Deuter/Protan = orange/blue.  "
+        .. "High Contrast = filled cell background, white text.")
 
     local function RefreshColorModeDropdown()
         local current = (addon and addon.db.profile.colorMode) or "default"
@@ -1050,7 +1064,9 @@ function BuildTuningTab(parent)
     local GHOST_KEYS   = { "sim", "bis", "history", "attendance", "mplus" }
     local GHOST_LABELS = { sim="Sim", bis="BiS", history="History",
                            attendance="Attendance", mplus="M+" }
-    local ghostSliderY = -16
+    -- Start sliders at -28 so the first slider's "Sim" label (which sits
+    -- above the slider track) clears ghostNote text.
+    local ghostSliderY = -28
     for _, k in ipairs(GHOST_KEYS) do
         local key = k  -- upvalue
         MakeSlider(ghostInner, {
@@ -1165,15 +1181,16 @@ function BuildLootDBTab(parent)
     })
 
     -- Vault / BOE weight (reads from profile.vaultWeight, not lootWeights).
+    -- Sits clear of the min-ilvl slider above (track at y=-188..-204).
     local vaultLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    vaultLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -192)
+    vaultLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -234)
     vaultLabel:SetText("Vault selections & BOE awards")
     vaultLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
 
     MakeSlider(inner, {
         label = "Vault / BOE weight",
         min = 0, max = 2, step = 0.1, isPercent = false,
-        width = 280, x = 4, y = -208,
+        width = 280, x = 4, y = -252,
         get = function()
             return (addon and addon.db.profile.vaultWeight) or 0.5
         end,
@@ -1268,6 +1285,12 @@ function BuildDataTab(parent)
     -- so it never shows stale data. Layout order: banner → schema → info → actions
     -- → RC integration → transparency — matches 4.12 Task 12.3 spec.
 
+    -- Layout strategy: chain every card top-down with `_layoutDataCards()`
+    -- so banners, info, actions, RC integration, and transparency stack
+    -- without overlap regardless of which banners are visible. The previous
+    -- mixed TOPLEFT/BOTTOMLEFT anchoring caused 112px+ overlap between the
+    -- actions and RC integration cards.
+
     local rcBannerCard, rcBannerInner = MakeSection(body, "")
     rcBannerCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
     rcBannerCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6)
@@ -1284,21 +1307,56 @@ function BuildDataTab(parent)
         "|cffff5555RCLootCouncil not detected. "
         .. "Score column will appear once RC loads.|r")
 
-    -- Height constants for offset math.
-    local RC_BANNER_H    = 52   -- banner card height + gap
-    local DRIFT_BANNER_H = 60   -- schema-drift banner height + gap
+    -- Card heights (used by the layout chain).
+    local RC_BANNER_H    = 44
+    local DRIFT_BANNER_H = 52
+    local INFO_H         = 86
+    local ACT_H          = 70
+    local RC_INTEG_H     = 64
+    -- transCard height is set when it's built below.
 
     -- Visibility tracking flags for the two banners.
     local _rcBannerVisible     = false
     local _schemaCardVisible   = false
 
-    -- Helper: recompute infoCard's TOPLEFT based on which banners are visible.
-    -- Called whenever either banner's visibility changes.
-    local function _repositionDataCards()
-        local offset = -6
-        if _rcBannerVisible   then offset = offset - RC_BANNER_H    end
-        if _schemaCardVisible then offset = offset - DRIFT_BANNER_H end
-        infoCard:SetPoint("TOPLEFT", body, "TOPLEFT", 6, offset)
+    -- Forward-declared so _layoutDataCards (defined below) can see them.
+    -- Each is assigned by its own MakeSection block later in this function.
+    local infoCard, actCard, rcCard, transCard
+
+    -- Single source of truth for vertical card placement on the Data tab.
+    -- Re-anchors every card top-down with a fixed 8px gap based on which
+    -- banners are currently shown.
+    local function _layoutDataCards()
+        local y = -6
+        if _rcBannerVisible then
+            y = y - RC_BANNER_H - 8
+        end
+        if _schemaCardVisible then
+            y = y - DRIFT_BANNER_H - 8
+        end
+        if infoCard then
+            infoCard:ClearAllPoints()
+            infoCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, y)
+            infoCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, y)
+            y = y - INFO_H - 8
+        end
+        if actCard then
+            actCard:ClearAllPoints()
+            actCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, y)
+            actCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, y)
+            y = y - ACT_H - 8
+        end
+        if rcCard then
+            rcCard:ClearAllPoints()
+            rcCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, y)
+            rcCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, y)
+            y = y - RC_INTEG_H - 8
+        end
+        if transCard then
+            transCard:ClearAllPoints()
+            transCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, y)
+            transCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, y)
+        end
     end
 
     -- Listen for RC detection events fired by Core.lua Task 2.
@@ -1306,12 +1364,12 @@ function BuildDataTab(parent)
         addon:RegisterMessage("BobleLoot_RCMissing", function()
             _rcBannerVisible = true
             rcBannerCard:Show()
-            _repositionDataCards()
+            _layoutDataCards()
         end)
         addon:RegisterMessage("BobleLoot_RCDetected", function()
             _rcBannerVisible = false
             rcBannerCard:Hide()
-            _repositionDataCards()
+            _layoutDataCards()
         end)
     end
 
@@ -1322,9 +1380,11 @@ function BuildDataTab(parent)
     local POPUP_SCHEMA_DETAIL = "BOBLELOOT_SCHEMA_DRIFT_DETAIL"
 
     local schemaCard, schemaInner = MakeSection(body, "RCLootCouncil compatibility")
-    schemaCard:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
-    schemaCard:SetPoint("TOPRIGHT",    body, "TOPRIGHT", -6, -6)
-    schemaCard:SetHeight(52)
+    -- Anchored below rcBannerCard when visible. The actual TOPLEFT/TOPRIGHT
+    -- points are set by _layoutDataCards every time visibility changes.
+    schemaCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6 - RC_BANNER_H - 8)
+    schemaCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6 - RC_BANNER_H - 8)
+    schemaCard:SetHeight(DRIFT_BANNER_H)
     schemaCard:Hide()  -- shown conditionally in OnShow
 
     local schemaLbl = schemaInner:CreateFontString(nil, "OVERLAY")
@@ -1385,9 +1445,12 @@ function BuildDataTab(parent)
         end, { width = 100, height = 20, x = 388, y = -4 })
 
     -- ── Dataset info card ─────────────────────────────────────────────
-    local infoCard, infoInner = MakeSection(body, "Dataset info")
-    infoCard:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
-    infoCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 240)
+    -- infoCard / actCard / rcCard / transCard are positioned by
+    -- _layoutDataCards. Each carries its own fixed height so the layout
+    -- function can chain them top-down with consistent 8px gaps.
+    local infoInner
+    infoCard, infoInner = MakeSection(body, "Dataset info")
+    infoCard:SetHeight(INFO_H)
 
     local infoLbl = infoInner:CreateFontString(nil, "OVERLAY")
     infoLbl:SetFont(T.fontBody, T.sizeBody)
@@ -1416,9 +1479,9 @@ function BuildDataTab(parent)
     end
 
     -- ── Actions card ──────────────────────────────────────────────────
-    local actCard, actInner = MakeSection(body, "Actions")
-    actCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6,  264)
-    actCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 130)
+    local actInner
+    actCard, actInner = MakeSection(body, "Actions")
+    actCard:SetHeight(ACT_H)
 
     -- Broadcast button.
     MakeButton(actInner, "Broadcast to raid",
@@ -1481,9 +1544,9 @@ function BuildDataTab(parent)
     -- ── RC integration card (item 4.8 + 4.9) ─────────────────────────
     -- Always visible. Shows the detected RC version (green/yellow/red) and
     -- the "Write score into RC Note field" toggle.
-    local rcCard, rcInner = MakeSection(body, "RC Integration")
-    rcCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 242)
-    rcCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 126)
+    local rcInner
+    rcCard, rcInner = MakeSection(body, "RC Integration")
+    rcCard:SetHeight(RC_INTEG_H)
 
     -- RC version info line (item 4.8). Refreshed in OnShow.
     local rcVersionLine = rcInner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -1505,9 +1568,11 @@ function BuildDataTab(parent)
     })
 
     -- ── Transparency card ─────────────────────────────────────────────
-    local transCard, transInner = MakeSection(body, "Transparency mode")
-    transCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 124)
-    transCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 6)
+    -- Height accommodates: transTog (y=-4), transHintLbl (y=-28),
+    -- suppressTog (y=-58), suppressHint (y=-76) + 2-line wrap + padding.
+    local transInner
+    transCard, transInner = MakeSection(body, "Transparency mode")
+    transCard:SetHeight(120)
 
     local transTog -- toggled in OnShow
 
@@ -1598,8 +1663,8 @@ function BuildDataTab(parent)
             _schemaCardVisible = false
         end
 
-        -- Reposition infoCard based on which banners are visible.
-        _repositionDataCards()
+        -- Re-anchor every card top-down based on current banner visibility.
+        _layoutDataCards()
 
         updateInfoLabel()
 
@@ -1708,7 +1773,9 @@ function BuildTestTab(parent)
         end,
     })
 
-    -- Reason label (shown when button is disabled).
+    -- Reason label (shown when button is disabled). Word-wraps to up to
+    -- two lines; runBtn sits 28px below the label baseline so a 2-line
+    -- reason cannot overlap the button.
     local reasonLbl = inner:CreateFontString(nil, "OVERLAY")
     reasonLbl:SetFont(T.fontBody, T.sizeSmall)
     reasonLbl:SetTextColor(T.warning[1], T.warning[2], T.warning[3])
@@ -1716,14 +1783,14 @@ function BuildTestTab(parent)
     reasonLbl:SetWidth(460)
     reasonLbl:SetText("")
 
-    -- Run button.
+    -- Run button — pushed down from -120 to -140 to clear two-line reason.
     local runBtn = MakeButton(inner, "Run test session",
         function()
             if not (ns.TestRunner and ns.TestRunner.Run) then return end
             ns.TestRunner:Run(addon,
                 (addon.db.profile.testItemCount or 5),
                 (addon.db.profile.testUseDatasetItems ~= false))
-        end, { width = 150, height = 24, x = 4, y = -120 })
+        end, { width = 150, height = 24, x = 4, y = -140 })
 
     -- Tooltip on the button itself when it is disabled — surfaces the reason
     -- even when the player doesn't notice the amber label below the button.

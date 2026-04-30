@@ -192,7 +192,7 @@ local function Populate(itemID, name, opts)
         frame._scrollChild:SetHeight(1)
         for _, lf in ipairs(_contentLines or {}) do lf:Hide() end
         _contentLines = _contentLines or {}
-        local lineH   = 14
+        local lineH   = 16
         local yOffset = 0
         local childW  = FRAME_W - 30
         for i, lineData in ipairs(lines) do
@@ -202,9 +202,14 @@ local function Populate(itemID, name, opts)
                 lf._left  = lf:CreateFontString(nil, "OVERLAY")
                 lf._left:SetFont(Th.fontBody, Th.sizeBody)
                 lf._left:SetJustifyH("LEFT")
+                -- Single-line: long breakdown rows truncate at the right
+                -- edge instead of wrapping (which would overlap the next
+                -- row, since we lay out by fixed lineH).
+                lf._left:SetWordWrap(false)
                 lf._right = lf:CreateFontString(nil, "OVERLAY")
                 lf._right:SetFont(Th.fontBody, Th.sizeBody)
                 lf._right:SetJustifyH("RIGHT")
+                lf._right:SetWordWrap(false)
                 _contentLines[i] = lf
             end
             lf:SetWidth(childW)
@@ -395,23 +400,25 @@ local function Populate(itemID, name, opts)
             local trend = ns.Scoring:GetScoreTrend(name, itemID,
                               (profile and profile.trendHistoryDays) or 28,
                               profile)
-            lines[#lines+1] = { left = " " }
+            -- Build the trend content first; only emit the blank
+            -- separator when there's something to show below it (avoids
+            -- an orphan blank line when GetTrendSummary returns nil).
+            local trendLine
             if not trend or #trend <= 1 then
-                lines[#lines+1] = {
-                    left = "|cff666666No score history for this item yet.|r"
-                }
+                trendLine = "|cff666666No score history for this item yet.|r"
             else
-                -- Trend summary line (full sparkline rendering in later batches).
                 local summary = ns.Scoring.GetTrendSummary
                                 and ns.Scoring:GetTrendSummary(name, profile)
                 if summary then
                     local sign = (summary.delta >= 0) and "+" or ""
-                    lines[#lines+1] = {
-                        left = string.format(
-                            "|cffaaaaaaScore trend: %s%.1f over %d days|r",
-                            sign, summary.delta, summary.count)
-                    }
+                    trendLine = string.format(
+                        "|cffaaaaaaScore trend: %s%.1f over %d days|r",
+                        sign, summary.delta, summary.count)
                 end
+            end
+            if trendLine then
+                lines[#lines+1] = { left = " " }
+                lines[#lines+1] = { left = trendLine }
             end
         end
     end
