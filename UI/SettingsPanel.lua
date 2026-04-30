@@ -1300,6 +1300,16 @@ function BuildDataTab(parent)
     -- mixed TOPLEFT/BOTTOMLEFT anchoring caused 112px+ overlap between the
     -- actions and RC integration cards.
 
+    -- Card heights (used by the layout chain). All bumped by 10 from the
+    -- pre-MakeSection-padding-fix values to keep usable inner space the
+    -- same now that inner is inset 10px further from the card top.
+    local RC_BANNER_H    = 54
+    local DRIFT_BANNER_H = 62
+    local INFO_H         = 96
+    local ACT_H          = 80
+    local RC_INTEG_H     = 74
+    -- transCard height is set when it's built below.
+
     local rcBannerCard, rcBannerInner = MakeSection(body, "")
     rcBannerCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6)
     rcBannerCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6)
@@ -1315,16 +1325,6 @@ function BuildDataTab(parent)
     rcBannerLbl:SetText(
         "|cffff5555RCLootCouncil not detected. "
         .. "Score column will appear once RC loads.|r")
-
-    -- Card heights (used by the layout chain). All bumped by 10 from the
-    -- pre-MakeSection-padding-fix values to keep usable inner space the
-    -- same now that inner is inset 10px further from the card top.
-    local RC_BANNER_H    = 54
-    local DRIFT_BANNER_H = 62
-    local INFO_H         = 96
-    local ACT_H          = 80
-    local RC_INTEG_H     = 74
-    -- transCard height is set when it's built below.
 
     -- Visibility tracking flags for the two banners.
     local _rcBannerVisible     = false
