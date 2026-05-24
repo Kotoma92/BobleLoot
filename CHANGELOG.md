@@ -3,6 +3,28 @@
 All notable changes are listed here. Each release is also published with
 notes on GitHub: https://github.com/Kotoma92/BobleLoot/releases
 
+## [1.2.5] - 2026-05-24
+
+### Fixed
+- UI: em-dash character now renders correctly throughout the addon. The
+  source code used Lua 5.2 `\xNN` hex escapes (e.g., `"\xe2\x80\x94"`)
+  which WoW's Lua 5.1 silently strips the backslash from, leaving the
+  literal text `xe2x80x94` in toasts, tooltips, and panel hints.
+  Converted all 16 occurrences across 7 files to the equivalent
+  decimal-escape form `"\226\128\148"`.
+- Settings panel **Data** tab: when the RC schema warning banner is
+  visible, the dataset info / activity / RC compatibility cards are
+  re-anchored beneath it so they no longer overlap.
+- Settings panel **Tuning** tab: pushed every control below the
+  "Override caps" toggle down ~14 px and grew the section card by
+  18 px so the override toggle no longer overlaps the Sim slider label
+  and the Role multipliers no longer overlap the Raider slider. Grew
+  the Ghost preset card by 30 px so the M+ slider no longer overlaps
+  the "Ghost button applies" caption.
+- Settings panel **Loot DB** tab: tightened category slider spacing
+  and shrunk the status card so the vault / BOE slider no longer
+  overlaps the loot history status header.
+
 ## [1.2.4] - 2026-05-24
 
 ### Fixed

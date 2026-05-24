@@ -1,4 +1,4 @@
---[[ UI/ExplainPanel.lua
+﻿--[[ UI/ExplainPanel.lua
      Roadmap 2.9 — "Why this score" pinnable explanation panel.
 
      Single-instance movable AceGUI-style frame at strata HIGH.
@@ -176,7 +176,7 @@ local function Populate(itemID, name, opts)
                 right = "|cff" .. hexColor(Th.muted) .. "no item|r",
             }
         end
-        lines[#lines+1] = { left = "|cff444444" .. string.rep("\xe2\x80\x94", 28) .. "|r" }
+        lines[#lines+1] = { left = "|cff444444" .. string.rep("\226\128\148", 28) .. "|r" }
         lines[#lines+1] = {
             left = "|cff" .. hexColor(Th.muted) .. "No scoring data for this item.|r"
         }
@@ -271,7 +271,7 @@ local function Populate(itemID, name, opts)
     end
 
     -- Separator
-    lines[#lines+1] = { left = "|cff444444" .. string.rep("\xe2\x80\x94", 28) .. "|r" }
+    lines[#lines+1] = { left = "|cff444444" .. string.rep("\226\128\148", 28) .. "|r" }
 
     if not inDs then
         lines[#lines+1] = {

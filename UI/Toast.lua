@@ -1,4 +1,4 @@
---[[ UI/Toast.lua
+﻿--[[ UI/Toast.lua
      BobleLoot toast notification surface.
      Roadmap item 3.12.
 
@@ -155,7 +155,7 @@ function Toast:Setup(addonArg)
     -- Chunked sync timeout (Batch 2C contract). Roadmap 4.12 exact wording.
     -- Arguments: sender (string) — unused in display; message is fixed per spec.
     addon:RegisterMessage("BobleLoot_SyncTimedOut", function(_, sender)
-        Toast:Show("Dataset sync timed out \xe2\x80\x94 using local data.", "warning")
+        Toast:Show("Dataset sync timed out \226\128\148 using local data.", "warning")
     end)
 
     --[[ CROSS-CONTRACT: Batch 3C
@@ -195,7 +195,7 @@ function Toast:Setup(addonArg)
     addonArg:RegisterMessage("BobleLoot_RCMissing", function()
         if not _rcMissingToastShown then
             _rcMissingToastShown = true
-            Toast:Show("RCLootCouncil not detected \xe2\x80\x94 score column unavailable.", "error")
+            Toast:Show("RCLootCouncil not detected \226\128\148 score column unavailable.", "error")
         end
     end)
 

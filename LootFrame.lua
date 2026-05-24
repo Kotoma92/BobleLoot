@@ -1,4 +1,4 @@
---[[ LootFrame.lua
+﻿--[[ LootFrame.lua
      Transparency mode: hooks RCLootCouncil's candidate-side loot frame
      ("RCLootFrame" — the window where each raider sees the item and
      clicks Need / Greed / Pass) and adds a "Your score" line + tooltip.
@@ -159,9 +159,9 @@ local function attachLabel(entryFrame)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 
         -- Title + separator
-        GameTooltip:AddLine("|cffddddddBoble Loot \xe2\x80\x94 your score|r")
+        GameTooltip:AddLine("|cffddddddBoble Loot \226\128\148 your score|r")
         GameTooltip:AddLine(
-            "|cff444444" .. string.rep("\xe2\x80\x94", 26) .. "|r")
+            "|cff444444" .. string.rep("\226\128\148", 26) .. "|r")
 
         -- Score line
         GameTooltip:AddDoubleLine("Score",
@@ -277,7 +277,7 @@ local function renderEntry(addon, entry, entryFrame)
     if not key then
         -- Player is not in dataset. Show muted label + explanatory tooltip.
         local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
-        fs:SetText(string.format("|cff%02x%02x%02xBL: \xe2\x80\x94|r",
+        fs:SetText(string.format("|cff%02x%02x%02xBL: \226\128\148|r",
             math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255)))
         entryFrame[SCORE_FRAME_KEY .. "_ctx"] = { notInDataset = true }
         return

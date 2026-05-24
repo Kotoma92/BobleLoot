@@ -1,4 +1,4 @@
---[[ UI/ComparePopout.lua
+﻿--[[ UI/ComparePopout.lua
      Side-by-side candidate comparison popout (Batch 3D, item 3.9).
 
      Public API:
@@ -278,7 +278,7 @@ local function RenderCompare(nameA, nameB, itemID, opts)
         sfs:SetFont(T.fontBody, T.sizeBody)
         sfs:SetTextColor(T.white[1], T.white[2], T.white[3])
         sfs:SetPoint("TOPLEFT", content, "TOPLEFT", xOff + COL_PAD, -20)
-        sfs:SetText(score and string.format("%.1f / 100", score) or "|cffaaaaaa\xe2\x80\x94|r")
+        sfs:SetText(score and string.format("%.1f / 100", score) or "|cffaaaaaa\226\128\148|r")
         addRow(sfs)
     end
 

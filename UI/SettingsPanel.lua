@@ -1,4 +1,4 @@
---[[ UI/SettingsPanel.lua
+﻿--[[ UI/SettingsPanel.lua
      Custom settings panel for BobleLoot.
      Shell: top-level frame, title bar, tab bar, scroll-frame body.
      Tab builders are appended below this shell section.
@@ -677,7 +677,7 @@ function BuildWeightsTab(parent)
     local allDisabledLbl = exInner:CreateFontString(nil, "OVERLAY")
     allDisabledLbl:SetFont(T.fontBody, T.sizeSmall)
     allDisabledLbl:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
-    allDisabledLbl:SetText("All components disabled \xe2\x80\x94 enable at least one.")
+    allDisabledLbl:SetText("All components disabled \226\128\148 enable at least one.")
     allDisabledLbl:SetPoint("TOPLEFT", exDetailLbl, "BOTTOMLEFT", 0, -4)
     allDisabledLbl:Hide()
 
@@ -755,7 +755,7 @@ function BuildTuningTab(parent)
     -- Deepest control: synth slider track at inner y=-460. Inner top is
     -- now offset 32 below card top (was 22), so card needs +10 to keep
     -- the same usable inner height.
-    card:SetHeight(538)
+    card:SetHeight(556)
 
     -- Track control references for conditional show/hide.
     local simCapSld, mplusCapSld, histCapSld, synthWeightSld
@@ -789,7 +789,7 @@ function BuildTuningTab(parent)
     simCapSld = MakeSlider(inner, {
         label = "Sim upgrade cap (% -> 100)",
         min = 0.5, max = 20, step = 0.5, isPercent = false,
-        width = 280, x = 4, y = -82,
+        width = 280, x = 4, y = -96,
         get = function() return (addon and addon.db.profile.simCap) or 5.0 end,
         set = function(v)
             if addon then addon.db.profile.simCap = v end
@@ -800,7 +800,7 @@ function BuildTuningTab(parent)
     mplusCapSld = MakeSlider(inner, {
         label = "M+ dungeons cap (count -> 100)",
         min = 5, max = 200, step = 1, isPercent = false,
-        width = 280, x = 4, y = -128,
+        width = 280, x = 4, y = -142,
         get = function() return (addon and addon.db.profile.mplusCap) or 40 end,
         set = function(v)
             if addon then addon.db.profile.mplusCap = v end
@@ -811,7 +811,7 @@ function BuildTuningTab(parent)
     histCapSld = MakeSlider(inner, {
         label = "Loot equity soft floor",
         min = 1, max = 20, step = 1, isPercent = false,
-        width = 280, x = 4, y = -174,
+        width = 280, x = 4, y = -188,
         get = function() return (addon and addon.db.profile.historyCap) or 5 end,
         set = function(v)
             if addon then addon.db.profile.historyCap = v end
@@ -822,7 +822,7 @@ function BuildTuningTab(parent)
     MakeSlider(inner, {
         label = "Loot history window (days, 0 = all time)",
         min = 0, max = 180, step = 1, isPercent = false,
-        width = 280, x = 4, y = -220,
+        width = 280, x = 4, y = -234,
         get = function() return (addon and addon.db.profile.lootHistoryDays) or 28 end,
         set = function(v)
             if addon then
@@ -838,14 +838,14 @@ function BuildTuningTab(parent)
     -- Heading label.
     local T = ns.Theme
     local roleLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    roleLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -270)
+    roleLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -284)
     roleLabel:SetText("Role history multipliers  (1.0 = full, 0.5 = half, 0.0 = none)")
     roleLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
 
     local ROLE_ROWS = {
-        { key = "raider", label = "Raider",  y = -286 },
-        { key = "trial",  label = "Trial",   y = -332 },
-        { key = "bench",  label = "Bench",   y = -378 },
+        { key = "raider", label = "Raider",  y = -300 },
+        { key = "trial",  label = "Trial",   y = -346 },
+        { key = "bench",  label = "Bench",   y = -392 },
     }
     for _, rr in ipairs(ROLE_ROWS) do
         MakeSlider(inner, {
@@ -872,7 +872,7 @@ function BuildTuningTab(parent)
     local synthLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     -- Pushed down from -428 to -428: needs ~16px clearance above the
     -- MakeSlider 'Synth weight' label which sits above the track at -460.
-    synthLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -428)
+    synthLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -442)
     synthLabel:SetText("Synthetic history (catalyst/token) weight")
     synthLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
 
@@ -886,7 +886,7 @@ function BuildTuningTab(parent)
         isPercent = false,
         width   = 220,
         x       = 4,
-        y       = -460,
+        y       = -474,
         get = function()
             return (addon and addon.db.profile.synthWeight) or 0.75
         end,
@@ -1059,15 +1059,15 @@ function BuildTuningTab(parent)
     local ghostCard, ghostInner = MakeSection(body, "Ghost Weights Preset")
     ghostCard:SetPoint("TOPLEFT",  trendCard, "BOTTOMLEFT",  0, -8)
     ghostCard:SetPoint("TOPRIGHT", trendCard, "BOTTOMRIGHT", 0, -8)
-    ghostCard:SetHeight(180)
-    ghostInner:SetHeight(160)
+    ghostCard:SetHeight(210)
+    ghostInner:SetHeight(178)
 
     local T2 = ns.Theme
     local ghostNote = ghostInner:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     ghostNote:SetFont(T2.fontBody, T2.sizeSmall)
     ghostNote:SetTextColor(T2.muted[1], T2.muted[2], T2.muted[3])
     ghostNote:SetPoint("TOPLEFT", ghostInner, "TOPLEFT", 0, -2)
-    ghostNote:SetText("Farm preset \xe2\x80\x94 used when the ghost-weights button is active.")
+    ghostNote:SetText("Farm preset \226\128\148 used when the ghost-weights button is active.")
 
     -- Five weight sliders for ghostPresets.farm.*
     local GHOST_KEYS   = { "sim", "bis", "history", "attendance", "mplus" }
@@ -1150,14 +1150,14 @@ function BuildLootDBTab(parent)
     local card, inner = MakeSection(body,
         "Loot category weights (for 'items received')")
     card:SetPoint("TOPLEFT",     body, "TOPLEFT",  6, -6)
-    card:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 110)
+    card:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 88)
 
     -- Category sliders.
     local CAT_ROWS = {
         { key = "bis",      label = "BiS",                         y = -4   },
-        { key = "major",    label = "Major upgrade",               y = -50  },
-        { key = "mainspec", label = "Mainspec / Need",             y = -96  },
-        { key = "minor",    label = "Minor upgrade",               y = -142 },
+        { key = "major",    label = "Major upgrade",               y = -42  },
+        { key = "mainspec", label = "Mainspec / Need",             y = -80  },
+        { key = "minor",    label = "Minor upgrade",               y = -118 },
     }
 
     for _, row in ipairs(CAT_ROWS) do
@@ -1180,7 +1180,7 @@ function BuildLootDBTab(parent)
     MakeSlider(inner, {
         label = "Minimum item level (0 = all tracks)",
         min = 0, max = 800, step = 5, isPercent = false,
-        width = 280, x = 4, y = -188,
+        width = 280, x = 4, y = -156,
         get = function() return (addon and addon.db.profile.lootMinIlvl) or 0 end,
         set = function(v)
             if not addon then return end
@@ -1192,14 +1192,14 @@ function BuildLootDBTab(parent)
     -- Vault / BOE weight (reads from profile.vaultWeight, not lootWeights).
     -- Sits clear of the min-ilvl slider above (track at y=-188..-204).
     local vaultLabel = inner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    vaultLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -234)
+    vaultLabel:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -194)
     vaultLabel:SetText("Vault selections & BOE awards")
     vaultLabel:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
 
     MakeSlider(inner, {
         label = "Vault / BOE weight",
         min = 0, max = 2, step = 0.1, isPercent = false,
-        width = 280, x = 4, y = -252,
+        width = 280, x = 4, y = -212,
         get = function()
             return (addon and addon.db.profile.vaultWeight) or 0.5
         end,
@@ -1213,7 +1213,7 @@ function BuildLootDBTab(parent)
 
     -- Status line.
     local statusCard, statusInner = MakeSection(body, "Loot history status")
-    statusCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 104)
+    statusCard:SetPoint("TOPLEFT",     body, "BOTTOMLEFT",  6, 80)
     statusCard:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", -6, 6)
 
     local statusLbl = statusInner:CreateFontString(nil, "OVERLAY")
@@ -1332,7 +1332,7 @@ function BuildDataTab(parent)
 
     -- Forward-declared so _layoutDataCards (defined below) can see them.
     -- Each is assigned by its own MakeSection block later in this function.
-    local infoCard, actCard, rcCard, transCard
+    local schemaCard, infoCard, actCard, rcCard, transCard
 
     -- Single source of truth for vertical card placement on the Data tab.
     -- Re-anchors every card top-down with a fixed 8px gap based on which
@@ -1342,8 +1342,18 @@ function BuildDataTab(parent)
         if _rcBannerVisible then
             y = y - RC_BANNER_H - 8
         end
-        if _schemaCardVisible then
-            y = y - DRIFT_BANNER_H - 8
+        if schemaCard then
+            schemaCard:ClearAllPoints()
+            if _schemaCardVisible then
+                schemaCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, y)
+                schemaCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, y)
+                y = y - DRIFT_BANNER_H - 8
+            else
+                -- Park off-screen when hidden so it never overlaps later cards
+                -- even if Show() is called outside of _layoutDataCards.
+                schemaCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, y)
+                schemaCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, y)
+            end
         end
         if infoCard then
             infoCard:ClearAllPoints()
@@ -1390,11 +1400,11 @@ function BuildDataTab(parent)
 
     local POPUP_SCHEMA_DETAIL = "BOBLELOOT_SCHEMA_DRIFT_DETAIL"
 
-    local schemaCard, schemaInner = MakeSection(body, "RCLootCouncil compatibility")
-    -- Anchored below rcBannerCard when visible. The actual TOPLEFT/TOPRIGHT
-    -- points are set by _layoutDataCards every time visibility changes.
-    schemaCard:SetPoint("TOPLEFT",  body, "TOPLEFT",  6, -6 - RC_BANNER_H - 8)
-    schemaCard:SetPoint("TOPRIGHT", body, "TOPRIGHT", -6, -6 - RC_BANNER_H - 8)
+    local schemaInner
+    schemaCard, schemaInner = MakeSection(body, "RCLootCouncil compatibility")
+    -- Anchored top-down by _layoutDataCards every time visibility changes
+    -- (initial position is set by the _layoutDataCards() call near the end
+    -- of BuildDataTab once all cards are constructed).
     schemaCard:SetHeight(DRIFT_BANNER_H)
     schemaCard:Hide()  -- shown conditionally in OnShow
 
@@ -1403,7 +1413,7 @@ function BuildDataTab(parent)
     schemaLbl:SetPoint("TOPLEFT", schemaInner, "TOPLEFT", 4, -2)
     schemaLbl:SetWidth(380)
     schemaLbl:SetText(
-        "RCLootCouncil schema mismatch \xe2\x80\x94 history may be incomplete. "
+        "RCLootCouncil schema mismatch \226\128\148 history may be incomplete. "
         .. "Run |cffffffff/bl lootdb|r for details.")
 
     local schemaDetailBtn = MakeButton(schemaInner, "View details",
@@ -1611,7 +1621,7 @@ function BuildDataTab(parent)
         transTog:HookScript("OnEnter", function(self)
             if UnitIsGroupLeader("player") then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:AddLine("|cffddddddBoble Loot \xe2\x80\x94 Transparency|r")
+            GameTooltip:AddLine("|cffddddddBoble Loot \226\128\148 Transparency|r")
             GameTooltip:AddLine(
                 "Only the raid leader can toggle transparency mode.",
                 0.53, 0.53, 0.53)
@@ -1809,7 +1819,7 @@ function BuildTestTab(parent)
     runBtn:SetScript("OnEnter", function(self)
         if self:IsEnabled() then return end   -- no tooltip needed when enabled
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine("|cffddddddBoble Loot \xe2\x80\x94 Test Session|r")
+        GameTooltip:AddLine("|cffddddddBoble Loot \226\128\148 Test Session|r")
         local RCAceAddon2 = LibStub and LibStub("AceAddon-3.0", true)
         local RC2
         if RCAceAddon2 then

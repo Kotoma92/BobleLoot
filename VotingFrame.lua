@@ -1,4 +1,4 @@
---[[ VotingFrame.lua
+﻿--[[ VotingFrame.lua
      Hooks RCLootCouncil's RCVotingFrame and adds a sortable Score column.
 
      RCLootCouncil exposes the voting frame as a module:
@@ -250,7 +250,7 @@ local function formatScore(score, inDataset, median, max, conflict)
     if not inDataset then
         -- Character is not in the dataset at all.
         local m = ns.Theme and ns.Theme.muted or {0.53, 0.53, 0.53, 1}
-        return string.format("|cff%02x%02x%02x\xe2\x80\x94|r",
+        return string.format("|cff%02x%02x%02x\226\128\148|r",
             math.floor(m[1]*255), math.floor(m[2]*255), math.floor(m[3]*255))
     end
     if not score then
@@ -380,7 +380,7 @@ local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef,
 
     -- Title + separator
     tt:AddLine("|cffddddddBoble Loot|r")
-    tt:AddLine("|cff444444" .. string.rep("\xe2\x80\x94", 26) .. "|r")
+    tt:AddLine("|cff444444" .. string.rep("\226\128\148", 26) .. "|r")
 
     -- Name + total score
     tt:AddDoubleLine(
@@ -877,7 +877,7 @@ function VF:Hook(addon, RC)
                         and formatAge(time() - d.generatedAtTimestamp)
                         or  "unknown time"
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:AddLine("Boble Loot \xe2\x80\x94 dataset age")
+            GameTooltip:AddLine("Boble Loot \226\128\148 dataset age")
             GameTooltip:AddLine(string.format(
                 "Dataset generated %s ago.", age), 1, 1, 1)
             GameTooltip:AddLine(
