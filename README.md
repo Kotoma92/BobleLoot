@@ -119,7 +119,7 @@ tooltip the council sees.
 
 ## In-game
 
-* `/bl` (or `/bobleloot`) — open the options panel (weights, caps, BiS partial credit, transparency toggle).
+* `/bl` (or `/bobleloot`) — open the options panel (weights, caps, BiS partial credit, transparency toggle). `/bl config` and `/bl options` are aliases.
 * `/bl broadcast` — re-announce your dataset to the raid (raid leader only really needs this).
 * `/bl transparency on|off` — leader-only quick toggle for transparency mode.
 * `/bl score <itemID> <Name-Realm>` — print a score breakdown to chat.
