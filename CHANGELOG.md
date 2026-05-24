@@ -3,6 +3,14 @@
 All notable changes are listed here. Each release is also published with
 notes on GitHub: https://github.com/Kotoma92/BobleLoot/releases
 
+## [1.2.4] - 2026-05-24
+
+### Fixed
+- TOC now declares `X-Curse-Project-ID: 1521965` so the BigWigs
+  packager can upload to CurseForge from the tag workflow. Previous
+  tagged releases (1.2.0 - 1.2.3) packaged successfully but skipped
+  the CF upload silently because the project ID was missing.
+
 ## [1.2.3] - 2026-05-24
 
 ### Changed

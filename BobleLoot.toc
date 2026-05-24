@@ -2,11 +2,12 @@
 ## Title: Boble Loot
 ## Notes: Adds a 0-100 candidate score column to RCLootCouncil based on WoWAudit sims, BiS lists, attendance, M+ score and loot history.
 ## Author: Kotoma
-## Version: 1.2.3
+## Version: 1.2.4
 ## OptionalDeps: RCLootCouncil
 ## SavedVariables: BobleLootDB, BobleLootSyncDB
 ## X-Category: Raid
 ## X-Website: https://github.com/Kotoma92/BobleLoot
+## X-Curse-Project-ID: 1521965
 ## IconTexture: Interface\Icons\inv_misc_dice_01
 
 Libs\Libs.xml
