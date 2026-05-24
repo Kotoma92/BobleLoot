@@ -18,6 +18,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify CurseForge credentials
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+        run: |
+          if [ -z "$CF_API_KEY" ]; then
+            echo "::error::CF_API_KEY secret is not set on this repository."
+            echo "::error::Without it the BigWigs packager builds the zip but cannot upload to CurseForge."
+            echo "::error::Create a token at https://legacy.curseforge.com/account/api-tokens and run:"
+            echo "::error::  gh secret set CF_API_KEY --repo Kotoma92/BobleLoot"
+            exit 1
+          fi
+
       - name: Package and upload
         uses: BigWigsMods/packager@v2
         env:
