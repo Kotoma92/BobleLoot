@@ -1,0 +1,18 @@
+package-as: BobleLoot
+
+# Libraries are vendored under Libs/ — do not let the packager pull
+# them from external repos, just ship what's in this tree.
+
+ignore:
+  - .github
+  - .env
+  - .env.example
+  - .gitignore
+  - .pkgmeta
+  - README.md
+  - docs
+  - tools
+  - BobleLoot-*.zip
+  - Data/BobleLoot_Data.lua
+
+enable-nolib-creation: no

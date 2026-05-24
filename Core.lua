@@ -14,30 +14,7 @@ local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
-BobleLoot.version = "2.0.0-dev"
-BobleLoot._rcHooked = false   -- set true when TryHookRC succeeds (4.10)
-
-BobleLoot._pendingAwards = BobleLoot._pendingAwards or {}
-
-StaticPopupDialogs["BOBLELOOT_IMPORT_PASTE"] = {
-    text = "Paste BobleLoot export JSON below:\n(use /bl importpaste to open)",
-    button1 = "Import",
-    button2 = "Cancel",
-    hasEditBox = true,
-    editBoxWidth = 500,
-    maxLetters = 0,
-    OnAccept = function(self)
-        local text = self.editBox and self.editBox:GetText()
-                     or self.EditBox and self.EditBox:GetText()
-                     or ""
-        BobleLoot:DoImportPaste(text)
-    end,
-    OnCancel = function() end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-    preferredIndex = 3,
-}
+BobleLoot.version = "1.2.0"
 
 local DB_DEFAULTS = {
     profile = {
