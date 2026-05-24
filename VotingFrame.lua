@@ -481,6 +481,117 @@ local function fillScoreTooltip(tt, addon, itemID, name, simRef, histRef,
     end
 end
 
+-- Static event handlers for score cells.
+-- These read state from self (the cell frame) which is populated each
+-- doCellUpdate. Keeping the handlers as module-level locals avoids
+-- allocating fresh closures on every render — important for 30-candidate
+-- raid sessions where RC re-renders the column frequently.
+local function cellOnEnter(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    local s = _sessionStats
+    fillScoreTooltip(GameTooltip, VF.addon, self._blItemID, self._blName,
+                     self._blSimRef, self._blHistRef, s.median, s.max)
+    GameTooltip:AddLine("|cff666666Shift-click to compare vs top candidate|r")
+    GameTooltip:Show()
+end
+
+local function cellOnLeave() GameTooltip:Hide() end
+
+local function cellOnMouseDown(self, button)
+    local addon    = VF.addon
+    local rcVoting = VF.rcVoting
+    local name     = self._blName
+    local itemID   = self._blItemID
+    local session  = self._blSession
+    local simRef   = self._blSimRef
+    local histRef  = self._blHistRef
+    local data     = self._blData
+
+    if button == "LeftButton" and IsShiftKeyDown() then
+        if not (ns.ComparePopout and ns.ComparePopout.Open) then return end
+        if not itemID then return end
+
+        -- Find the top-ranked candidate from the cached nameToScore map.
+        -- Falls back to a single Compute pass only if the cache is empty.
+        local nameToScore = _sessionStats.nameToScore
+        local topName, topScore
+        if nameToScore then
+            for n, s in pairs(nameToScore) do
+                if not topScore or s > topScore then topScore, topName = s, n end
+            end
+        else
+            for _, row in ipairs(data or {}) do
+                if row.name then
+                    local s = computeScoreForRow(rcVoting, addon, session,
+                                                 row.name, simRef, histRef)
+                    if s and (not topScore or s > topScore) then
+                        topScore, topName = s, row.name
+                    end
+                end
+            end
+        end
+
+        -- If the clicked candidate IS the top candidate, compare against
+        -- the second-ranked instead (avoids a trivially identical popout).
+        local nameB = topName
+        if topName == name then
+            local secondName, secondScore
+            if nameToScore then
+                for n, s in pairs(nameToScore) do
+                    if n ~= name and (not secondScore or s > secondScore) then
+                        secondScore, secondName = s, n
+                    end
+                end
+            else
+                for _, row in ipairs(data or {}) do
+                    if row.name and row.name ~= name then
+                        local s = computeScoreForRow(rcVoting, addon, session,
+                                                     row.name, simRef, histRef)
+                        if s and (not secondScore or s > secondScore) then
+                            secondScore, secondName = s, row.name
+                        end
+                    end
+                end
+            end
+            nameB = secondName or topName
+        end
+
+        -- Single-candidate session guard.
+        if not nameB or nameB == name then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine("BobleLoot \226\128\148 Compare")
+            GameTooltip:AddLine(
+                "Need at least two scored candidates to compare.", 1, 0.5, 0.5)
+            GameTooltip:Show()
+            C_Timer.After(2, function() GameTooltip:Hide() end)
+            return
+        end
+
+        local iLink
+        if rcVoting.GetLootTable then
+            local lt = rcVoting:GetLootTable()
+            if lt and lt[session] then iLink = lt[session].link end
+        end
+
+        ns.ComparePopout:Open(name, nameB, itemID, iLink, {
+            simReference     = simRef,
+            historyReference = histRef,
+            sessionMedian    = _sessionStats.median,
+            sessionMax       = _sessionStats.max,
+        })
+    elseif button == "RightButton" then
+        GameTooltip:Hide()
+        if ns.ExplainPanel and ns.ExplainPanel.Open then
+            ns.ExplainPanel:Open(itemID, name, {
+                simReference     = simRef,
+                historyReference = histRef,
+                sessionMedian    = _sessionStats.median,
+                sessionMax       = _sessionStats.max,
+            })
+        end
+    end
+end
+
 local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, column,
                             fShow, table, ...)
     if not fShow then return end
@@ -578,95 +689,24 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
         end
     end
 
-    cellFrame:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        local med, mx = computeSessionStats(rcVoting, addon, session, data)
-        fillScoreTooltip(GameTooltip, addon, itemID, name, simRef, histRef, med, mx)
-        GameTooltip:AddLine("|cff666666Shift-click to compare vs top candidate|r")
-        GameTooltip:Show()
-    end)
-    cellFrame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    -- Stash state on the cell frame for the (already-installed) static
+    -- handlers to read. This avoids allocating fresh closures per render.
+    cellFrame._blName     = name
+    cellFrame._blItemID   = itemID
+    cellFrame._blSession  = session
+    cellFrame._blSimRef   = simRef
+    cellFrame._blHistRef  = histRef
+    cellFrame._blData     = data
 
-    -- Right-click on score cell: open the pinnable explain panel (roadmap 2.9).
-    -- This handler is scoped to the score cell only; 2E's conflict indicator
-    -- modifies the text content via the SetText() call above and does not
-    -- touch this script slot.
-    cellFrame:SetScript("OnMouseDown", function(self, button)
-        if button == "LeftButton" and IsShiftKeyDown() then
-            if not (ns.ComparePopout and ns.ComparePopout.Open) then return end
-            if not itemID then return end
-
-            -- Find the top-ranked candidate by score in the current data set.
-            local topName, topScore
-            for _, row in ipairs(data or {}) do
-                if row.name then
-                    local s = computeScoreForRow(rcVoting, addon, session,
-                                                 row.name, simRef, histRef)
-                    if s and (not topScore or s > topScore) then
-                        topScore = s
-                        topName  = row.name
-                    end
-                end
-            end
-
-            -- If the clicked candidate IS the top candidate, compare against
-            -- the second-ranked instead (avoids a trivially identical popout).
-            local nameB = topName
-            if topName == name then
-                local secondName, secondScore
-                for _, row in ipairs(data or {}) do
-                    if row.name and row.name ~= name then
-                        local s = computeScoreForRow(rcVoting, addon, session,
-                                                     row.name, simRef, histRef)
-                        if s and (not secondScore or s > secondScore) then
-                            secondScore = s
-                            secondName  = row.name
-                        end
-                    end
-                end
-                nameB = secondName or topName
-            end
-
-            -- Single-candidate session guard.
-            if not nameB or nameB == name then
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:AddLine("BobleLoot \226\128\148 Compare")
-                GameTooltip:AddLine(
-                    "Need at least two scored candidates to compare.", 1, 0.5, 0.5)
-                GameTooltip:Show()
-                C_Timer.After(2, function() GameTooltip:Hide() end)
-                return
-            end
-
-            -- Retrieve item link for the title bar.
-            local iLink
-            if rcVoting.GetLootTable then
-                local lt = rcVoting:GetLootTable()
-                if lt and lt[session] then iLink = lt[session].link end
-            end
-
-            local med, mx = computeSessionStats(rcVoting, addon, session, data)
-            ns.ComparePopout:Open(name, nameB, itemID, iLink, {
-                simReference     = simRef,
-                historyReference = histRef,
-                sessionMedian    = med,
-                sessionMax       = mx,
-            })
-        elseif button == "RightButton" then
-            GameTooltip:Hide()
-            if ns.ExplainPanel and ns.ExplainPanel.Open then
-                local med, mx = computeSessionStats(rcVoting, addon, session, data)
-                ns.ExplainPanel:Open(itemID, name, {
-                    simReference     = simRef,
-                    historyReference = histRef,
-                    sessionMedian    = med,
-                    sessionMax       = mx,
-                })
-            end
-        end
-    end)
-    -- EnableMouse so the OnMouseDown fires (lib-st cells may not have this by default).
-    cellFrame:EnableMouse(true)
+    -- Install handlers once per cell frame (lib-st reuses cell frames
+    -- across renders so this happens 30 times total, not per render).
+    if not cellFrame._blHandlersSet then
+        cellFrame:SetScript("OnEnter",     cellOnEnter)
+        cellFrame:SetScript("OnLeave",     cellOnLeave)
+        cellFrame:SetScript("OnMouseDown", cellOnMouseDown)
+        cellFrame:EnableMouse(true)
+        cellFrame._blHandlersSet = true
+    end
 end
 
 local function sortFn(table, rowa, rowb, sortbycol)
@@ -676,9 +716,21 @@ local function sortFn(table, rowa, rowb, sortbycol)
     local session  = rcVoting.GetCurrentSession and rcVoting:GetCurrentSession()
                      or rcVoting.session
     local itemID = getItemIDForSession(rcVoting, session)
-    local names  = bidderNames(rcVoting, session, table.data)
-    local simRef = simReferenceFor(addon, itemID, names)
-    local histRef = historyReferenceFor(addon, names)
+
+    -- Perf: reuse the (session, itemID)-scoped cache populated by
+    -- computeSessionStats. Sort is O(N log N) comparisons; recomputing
+    -- simRef/histRef per comparison previously did ~150 × 60 = 9000
+    -- wasted iterations on a 30-candidate session sort.
+    local simRef, histRef
+    if _sessionStats.session == session and _sessionStats.itemID == itemID then
+        simRef  = _sessionStats.simRef
+        histRef = _sessionStats.histRef
+    end
+    if simRef == nil and histRef == nil then
+        local names = bidderNames(rcVoting, session, table.data)
+        simRef  = simReferenceFor(addon, itemID, names)
+        histRef = historyReferenceFor(addon, names)
+    end
     local function ghostScore(rowName)
         if VF.ghostMode and VF._ghostWeights then
             local savedW = addon.db.profile.weights

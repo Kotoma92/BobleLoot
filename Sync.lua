@@ -396,6 +396,23 @@ function Sync:SendScores(addon, itemID, scores)
     if not itemID or type(scores) ~= "table" then return end
 
     self._lastSentScores = self._lastSentScores or {}
+    self._lastSentCounts = self._lastSentCounts or {}
+    self._lastSentSums   = self._lastSentSums   or {}
+
+    -- Cheap pre-check: count + score sum. If both match the last
+    -- broadcast for this itemID we skip the (expensive) sort+concat
+    -- signature build entirely. Collisions are harmless — they just
+    -- delay one broadcast by a single render cycle.
+    local count, sum = 0, 0
+    for _, s in pairs(scores) do
+        count = count + 1
+        sum   = sum + (s or 0)
+    end
+    if self._lastSentCounts[itemID] == count
+       and self._lastSentSums[itemID]   == sum then
+        return
+    end
+
     -- Build a stable signature: sorted "name=score" pairs.
     local pairs_ = {}
     for n, s in pairs(scores) do
@@ -403,8 +420,16 @@ function Sync:SendScores(addon, itemID, scores)
     end
     table.sort(pairs_)
     local sig = table.concat(pairs_, "|")
-    if self._lastSentScores[itemID] == sig then return end
+    if self._lastSentScores[itemID] == sig then
+        -- Sum/count drifted but signature matched (e.g. floating-point
+        -- noise across recomputes); refresh fast-path keys and bail.
+        self._lastSentCounts[itemID] = count
+        self._lastSentSums[itemID]   = sum
+        return
+    end
     self._lastSentScores[itemID] = sig
+    self._lastSentCounts[itemID] = count
+    self._lastSentSums[itemID]   = sum
 
     send(addon, self:_wrap({ kind = KIND_SCORES, iid = itemID, scores = scores }), dist)
 end
