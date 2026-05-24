@@ -194,6 +194,9 @@ local function computeSessionStats(rcVoting, addon, session, tableData)
         max          = max,
         sortedScores = scores,    -- already sorted ascending
         nameToScore  = nameToScore,
+        simRef       = simRef,    -- perf: cache so doCellUpdate doesn't recompute per-row
+        histRef      = histRef,
+        names        = names,
     }
     return median, max
 end
@@ -499,23 +502,37 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
         _sessionStats = {}
     end
 
-    local names    = bidderNames(rcVoting, session, data)
-    local simRef   = simReferenceFor(addon, itemID, names)
-    local histRef  = historyReferenceFor(addon, names)
+    -- Perf: populate _sessionStats up-front so we can pull cached simRef/histRef
+    -- and nameToScore below instead of recomputing per-row (30 candidates × 30 cell
+    -- renders previously did 900 redundant Compute calls when transparency was on).
+    local median, max = computeSessionStats(rcVoting, addon, session, data)
+
+    local simRef  = _sessionStats.simRef
+    local histRef = _sessionStats.histRef
+    -- Fallbacks for the (rare) path where computeSessionStats returned empty —
+    -- e.g. dataset has no characters matching any bidder.
+    if simRef == nil and histRef == nil then
+        local names = bidderNames(rcVoting, session, data)
+        simRef  = simReferenceFor(addon, itemID, names)
+        histRef = historyReferenceFor(addon, names)
+    end
 
     local score
     if VF.ghostMode and VF._ghostWeights then
         -- Ghost-weights path: temporarily substitute the alternate preset.
+        -- Cache is invalidated when ghostMode toggles (SetGhostMode line ~353),
+        -- so nameToScore here reflects ghost weights.
         local profile = addon.db.profile
         local savedW  = profile.weights
         profile.weights = VF._ghostWeights
-        score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
+        score = (_sessionStats.nameToScore and _sessionStats.nameToScore[name])
+                or computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
         profile.weights = savedW
     else
-        score = computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
+        score = (_sessionStats.nameToScore and _sessionStats.nameToScore[name])
+                or computeScoreForRow(rcVoting, addon, session, name, simRef, histRef)
     end
-    local inDs               = isInDataset(addon, name)
-    local median, max        = computeSessionStats(rcVoting, addon, session, data)
+    local inDs     = isInDataset(addon, name)
 
     -- conflictThreshold: set in Settings > Tuning > "Display" section (2.10).
     -- Default 5 points. Both candidates within threshold get the ~ prefix.
@@ -549,17 +566,16 @@ local function doCellUpdate(rowFrame, cellFrame, data, cols, row, realrow, colum
 
     -- If we're the leader (and transparency is on so it matters),
     -- broadcast authoritative scores for every candidate so raiders see
-    -- exactly what we see. Throttled inside Sync:SendScores.
+    -- exactly what we see. Throttled inside Sync:SendScores via signature.
+    -- Perf: reuse the nameToScore map already built by computeSessionStats
+    -- rather than recomputing every candidate per-cell (was 30x30 = 900
+    -- Compute calls per session render with 30 candidates).
     if itemID and addon:IsTransparencyEnabled() and ns.Sync
        and UnitIsGroupLeader and UnitIsGroupLeader("player") then
-        local scores = {}
-        for _, r in ipairs(data) do
-            if r.name then
-                local s = computeScoreForRow(rcVoting, addon, session, r.name, simRef, histRef)
-                if s then scores[r.name] = s end
-            end
+        local scores = _sessionStats.nameToScore
+        if scores and next(scores) then
+            ns.Sync:SendScores(addon, itemID, scores)
         end
-        ns.Sync:SendScores(addon, itemID, scores)
     end
 
     cellFrame:SetScript("OnEnter", function(self)

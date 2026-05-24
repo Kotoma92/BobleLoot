@@ -276,6 +276,27 @@ function Sync:SendHello(addon)
     send(addon, self:_wrap({ kind = KIND_HELLO, v = v, n = countChars(data), pv = PROTO_VERSION }), dist)
 end
 
+-- Coalesce rapid HELLO triggers (roster updates fire frequently during
+-- a raid: ready checks, vehicle entries, member churn). Without this,
+-- 30 clients × 29 listeners = 870 deliveries per roster blip, which can
+-- starve the addon comm channel. Jitter spreads sends across a 0-3s
+-- window; dedupe collapses bursts within 10s.
+Sync._lastHelloSent = 0
+Sync._helloScheduled = false
+local HELLO_DEDUPE_WINDOW = 10  -- seconds
+function Sync:ScheduleHello(addon)
+    if self._helloScheduled then return end
+    local now = (GetTime and GetTime()) or 0
+    if now - (self._lastHelloSent or 0) < HELLO_DEDUPE_WINDOW then return end
+    self._helloScheduled = true
+    local jitter = (math.random and math.random() or 0) * 3.0
+    C_Timer.After(jitter, function()
+        Sync._helloScheduled = false
+        Sync._lastHelloSent  = (GetTime and GetTime()) or 0
+        Sync:SendHello(addon)
+    end)
+end
+
 function Sync:SendRequest(addon, target, version)
     -- REQ is a whisper; speak at the peer's negotiated proto if known.
     local peerPv = self.peers and self.peers[target] and self.peers[target].pv
@@ -953,7 +974,7 @@ function Sync:Setup(addon)
 
     addon:RegisterEvent("GROUP_ROSTER_UPDATE", function()
         if inGroup() then
-            Sync:SendHello(addon)
+            Sync:ScheduleHello(addon)
             -- If we're the leader, also (re)broadcast the current
             -- transparency setting so newly-joined members pick it up.
             if isLeader() then Sync:SendSettings(addon) end
@@ -962,7 +983,7 @@ function Sync:Setup(addon)
     addon:RegisterEvent("PLAYER_ENTERING_WORLD", function()
         C_Timer.After(5, function()
             if inGroup() then
-                Sync:SendHello(addon)
+                Sync:ScheduleHello(addon)
                 if isLeader() then Sync:SendSettings(addon) end
             end
         end)
