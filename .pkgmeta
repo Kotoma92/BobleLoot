@@ -5,6 +5,7 @@ package-as: BobleLoot
 
 ignore:
   - .github
+  - .editorconfig
   - .env
   - .env.example
   - .gitignore
@@ -16,5 +17,8 @@ ignore:
   - tools
   - BobleLoot-*.zip
   - Data/BobleLoot_Data.lua
+
+# Surface the changelog to the BigWigs packager so it shows on CurseForge.
+changelog-title: BobleLoot
 
 enable-nolib-creation: no

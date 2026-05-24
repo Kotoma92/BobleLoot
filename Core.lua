@@ -14,7 +14,7 @@ local BobleLoot = AceAddon:NewAddon(ADDON_NAME,
 ns.addon = BobleLoot
 _G.BobleLoot = BobleLoot
 
-BobleLoot.version = "1.2.2"
+BobleLoot.version = "1.2.3"
 
 local DB_DEFAULTS = {
     profile = {
