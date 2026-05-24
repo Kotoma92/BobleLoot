@@ -8,8 +8,10 @@ ignore:
   - .env
   - .env.example
   - .gitignore
+  - .luacheckrc
   - .pkgmeta
   - README.md
+  - bis
   - docs
   - tools
   - BobleLoot-*.zip
